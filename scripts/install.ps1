@@ -53,6 +53,21 @@ function Test-Checksum([string]$File, [string]$Sums) {
     if ($actual -ne ($line -split ' ')[0]) { Stop-Install "$name does not match SHA256SUMS. Nothing was installed." }
 }
 
+# Whether cosign verifies SHA256SUMS against its Sigstore bundle. cosign says
+# "Verified OK" on stderr, which Windows PowerShell would turn into an error
+# here; its exit status is the answer.
+function Test-Signature([string]$Cosign, [string]$Sums, [string]$Bundle, [string]$Identity) {
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Cosign verify-blob $Sums --bundle $Bundle --certificate-identity $Identity `
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com 2>&1 | Out-Null
+        return $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { 'arm64' } else { 'x64' }
 $work = Join-Path ([IO.Path]::GetTempPath()) ('varlatch-app-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $work | Out-Null
@@ -87,20 +102,23 @@ try {
         # The release workflow signs SHA256SUMS; with cosign installed, check that too.
         $bundle = Join-Path $work 'SHA256SUMS.sigstore.json'
         $signature = 'none: this release carries no signature'
+        $signed = $true
         try {
             Invoke-WebRequest -Uri "$base/SHA256SUMS.sigstore.json" -OutFile $bundle -UseBasicParsing -UserAgent $UserAgent
+        } catch {
+            $signed = $false
+        }
+        if ($signed) {
             $cosign = Get-Command cosign.exe -ErrorAction SilentlyContinue
             if ($cosign) {
-                & $cosign.Source verify-blob $sums --bundle $bundle `
-                    --certificate-identity "https://github.com/$Repo/.github/workflows/release.yml@refs/tags/v$Version" `
-                    --certificate-oidc-issuer https://token.actions.githubusercontent.com 2>$null | Out-Null
-                if ($LASTEXITCODE -ne 0) { Stop-Install 'the signature on SHA256SUMS does NOT verify. Nothing was installed.' }
+                $identity = "https://github.com/$Repo/.github/workflows/release.yml@refs/tags/v$Version"
+                if (-not (Test-Signature $cosign.Source $sums $bundle $identity)) {
+                    Stop-Install 'the signature on SHA256SUMS does NOT verify. Nothing was installed.'
+                }
                 $signature = "verified: signed by the $Repo release workflow for v$Version"
             } else {
                 $signature = 'NOT checked: the release is signed, but cosign is not installed'
             }
-        } catch {
-            Remove-Item $bundle -ErrorAction SilentlyContinue
         }
         Test-Checksum $archive $sums
         $checked = 'ok (SHA256SUMS)'
@@ -110,7 +128,10 @@ try {
     Expand-Archive -Path $archive -DestinationPath $unpacked
     $exeName = 'Varlatch.exe'
     if (-not (Test-Path (Join-Path $unpacked $exeName))) { Stop-Install "the archive has no $exeName. Nothing was installed." }
-    $newVersion = (Get-Item (Join-Path $unpacked $exeName)).VersionInfo.ProductVersion
+    # "0.1.1+abc1234": the release, and the commit it was built from.
+    $productVersion = (Get-Item (Join-Path $unpacked $exeName)).VersionInfo.ProductVersion
+    $newVersion = ($productVersion -split '\+')[0]
+    $builtFrom = if ($productVersion -match '\+(.+)$') { " ($($Matches[1]))" } else { '' }
 
     # A running copy holds its files: ask it to quit (a sign-in it started is
     # cancelled), and end it if it does not.
@@ -163,7 +184,7 @@ Set-ItemProperty -Path $UninstallKey -Name EstimatedSize -Value $size -Type DWor
 Set-ItemProperty -Path $UninstallKey -Name NoModify -Value 1 -Type DWord
 Set-ItemProperty -Path $UninstallKey -Name NoRepair -Value 1 -Type DWord
 
-Write-Host "Installed Varlatch for Windows $newVersion in $InstallDir"
+Write-Host "Installed Varlatch for Windows $newVersion$builtFrom in $InstallDir"
 Write-Host "  checksum:  $checked"
 if ($signature) { Write-Host "  signature: $signature" }
 if (-not $NoLaunch) {

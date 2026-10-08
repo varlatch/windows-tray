@@ -106,7 +106,25 @@ function Get-LatestRelease {
 function Get-NodeMajor {
     $node = Get-Command node.exe -ErrorAction SilentlyContinue
     if (-not $node) { return 0 }
-    try { return [int](& $node.Source -p "process.versions.node.split('.')[0]") } catch { return 0 }
+    try { return [int](Invoke-Quietly $node.Source -p "process.versions.node.split('.')[0]") } catch { return 0 }
+}
+
+# A program's first line of output, with what it writes to stderr dropped.
+# Windows PowerShell turns stderr into errors, which would stop this script
+# when, say, cosign says "Verified OK" there; the exit status is in
+# $LASTEXITCODE.
+#
+# No named parameters: every argument, -p included, goes to the program.
+function Invoke-Quietly {
+    $program, $arguments = $args
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $program @arguments 2>$null
+        return ($out | Select-Object -First 1)
+    } finally {
+        $ErrorActionPreference = $previous
+    }
 }
 
 # Tells Explorer and new terminals that the user PATH changed.
@@ -145,7 +163,7 @@ $shim = Join-Path $InstallDir 'varlatch.cmd'
 
 if ((Test-Path $target) -and -not $Version) {
     $have = ''
-    if ((Get-NodeMajor) -gt 0) { $have = (& node $target --version 2>$null | Select-Object -First 1) }
+    if ((Get-NodeMajor) -gt 0) { $have = Invoke-Quietly node $target --version }
     Write-Host "The CLI is already installed: $target $have"
     Write-Host 'Update it from the Varlatch panel, or with: varlatch self-update'
     if ($App) { & $App --refresh }
@@ -186,12 +204,16 @@ if (-not $Version) { Stop-Install "cannot find the latest release of $Repo (offl
 # Node.js 22 or newer runs the release CLI.
 if ((Get-NodeMajor) -lt 22) {
     $found = (Get-Command node.exe -ErrorAction SilentlyContinue)
-    $what = if ($found) { "Node.js $(& node --version) is too old" } else { 'Node.js is not installed' }
+    $what = if ($found) { "Node.js $(Invoke-Quietly node --version) is too old" } else { 'Node.js is not installed' }
     Write-Host ''
     Write-Host "$what; the varlatch CLI needs Node.js 22 or newer."
     $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
     if (-not $winget) { Stop-Install 'install Node.js 22 or newer from https://nodejs.org, then run this again.' }
-    if (-not (Confirm-Step 'Install Node.js LTS with winget?' $true)) { Stop-Install 'Node.js 22 or newer is needed. Nothing was installed.' }
+    # Never without asking, even with -Yes: it changes the machine's Node.js
+    # for everything else on it.
+    if ($Yes) { Stop-Install 'Node.js 22 or newer is needed: install it (winget install OpenJS.NodeJS.LTS), then run this again.' }
+    $answer = Read-Host 'Install Node.js LTS with winget? [Y/n]'
+    if ($answer -and $answer -notmatch '^[yY]') { Stop-Install 'Node.js 22 or newer is needed. Nothing was installed.' }
     & $winget.Source install --id OpenJS.NodeJS.LTS --exact --source winget --accept-source-agreements --accept-package-agreements
     Update-SessionPath
     if ((Get-NodeMajor) -lt 22) { Stop-Install 'Node.js 22 or newer is still not on the PATH. Open a new terminal and run this again.' }
@@ -221,9 +243,9 @@ try {
     if (Test-Path $bundle) {
         $cosign = Get-Command cosign.exe -ErrorAction SilentlyContinue
         if ($cosign) {
-            & $cosign.Source verify-blob (Join-Path $work 'SHA256SUMS') --bundle $bundle `
+            Invoke-Quietly $cosign.Source verify-blob (Join-Path $work 'SHA256SUMS') --bundle $bundle `
                 --certificate-identity "https://github.com/$Repo/.github/workflows/release.yml@refs/tags/v$Version" `
-                --certificate-oidc-issuer https://token.actions.githubusercontent.com 2>$null | Out-Null
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com | Out-Null
             if ($LASTEXITCODE -ne 0) { Stop-Install 'the signature on SHA256SUMS does NOT verify. Nothing was installed.' }
             $signature = "verified: signed by the $Repo release workflow for v$Version"
         } else {
@@ -240,7 +262,7 @@ try {
     $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $work $asset)).Hash.ToLowerInvariant()
     if ($actual -ne $expected) { Stop-Install "$asset does not match SHA256SUMS. Nothing was installed." }
 
-    $reported = (& node (Join-Path $work $asset) --version 2>$null | Select-Object -First 1)
+    $reported = Invoke-Quietly node (Join-Path $work $asset) --version
     if ($reported -notmatch "^varlatch $([regex]::Escape($Version))( |$)") {
         Stop-Install "the downloaded CLI reports `"$reported`", expected varlatch $Version. Nothing was installed."
     }
@@ -268,7 +290,7 @@ try {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
 
-Write-Host "Installed: $(& node $target --version | Select-Object -First 1)"
+Write-Host "Installed: $(Invoke-Quietly node $target --version)"
 if (-not $NoPath) {
     if (Add-UserPath $InstallDir) {
         Write-Host "Added $InstallDir to your PATH: varlatch works in new terminals."

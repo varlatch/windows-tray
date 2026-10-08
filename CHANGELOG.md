@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1 (2026-10-08)
+
+- **Fix:** with cosign installed, `install.ps1` checks the Sigstore
+  signature on the release's `SHA256SUMS` as it says it does; 0.1.0's
+  reported the release as unsigned. **Install in Terminal** checks the CLI
+  release's signature instead of stopping with an error.
+- **Install in Terminal** always asks before installing Node.js with
+  winget, since that changes the Node.js everything else on the PC uses.
+- Settings > Apps > Installed apps shows the version without the commit it
+  was built from.
+
 ## 0.1.0 (2026-10-08)
 
 First release, installed with

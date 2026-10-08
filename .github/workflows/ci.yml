@@ -33,6 +33,17 @@ jobs:
             foreach ($e in $errors) { $failed = $true; Write-Host "$($file.Name):$($e.Extent.StartLineNumber): $($e.Message)" }
           }
           if ($failed) { exit 1 }
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+      # Install in Terminal, against a real release: it must check the
+      # signature, not just the checksum.
+      - name: The CLI installer installs a checked release CLI
+        shell: powershell
+        run: |
+          $out = scripts/install-cli.ps1 -Version 0.15.1 -Yes -NoPath -InstallDir "$env:RUNNER_TEMP\cli" *>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if ($out -notmatch 'signature: verified') { Write-Host 'The signature was not verified.'; exit 1 }
+          & "$env:RUNNER_TEMP\cli\varlatch.cmd" --version
       - name: Release archives build
         shell: powershell
         run: scripts/build.ps1 -Version 0.0.0
