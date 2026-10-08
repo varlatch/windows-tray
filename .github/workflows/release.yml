@@ -1,0 +1,48 @@
+name: Release
+
+# On a v* tag: test, build the archives for x64 and Arm64, sign SHA256SUMS
+# keyless with Sigstore from this workflow's own identity (as varlatch/varlatch
+# does), and publish them with install.ps1 as a GitHub release.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write # keyless signing of SHA256SUMS
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Tests
+        run: dotnet test tests/VarlatchKit.Tests -c Release
+      - name: Build
+        shell: powershell
+        run: scripts/build.ps1 -Version ($env:GITHUB_REF_NAME -replace '^v', '')
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+      - name: Sign SHA256SUMS
+        working-directory: dist
+        shell: bash
+        run: cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # This version's section of the changelog, without its heading.
+          awk -v v="$version" '
+            /^## / { if (found) exit; if (index($0, "## " v " ") == 1 || $0 == "## " v) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --title "Varlatch for Windows $version" --notes-file notes.md

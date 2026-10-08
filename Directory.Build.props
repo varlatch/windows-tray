@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Company>Robotsson</Company>
+    <Product>Varlatch for Windows</Product>
+    <Copyright>Copyright © 2026 Robotsson</Copyright>
+    <!-- scripts/build.ps1 sets these from the release tag and git. -->
+    <Version Condition="'$(Version)' == ''">0.1.0</Version>
+    <SourceRevision Condition="'$(SourceRevision)' == ''"></SourceRevision>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+</Project>

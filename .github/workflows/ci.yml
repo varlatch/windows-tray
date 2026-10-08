@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      # The fake CLI the tests run is a Node.js script, as the release CLI is.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Tests
+        run: dotnet test tests/VarlatchKit.Tests -c Release
+      - name: The PowerShell scripts parse in Windows PowerShell
+        shell: powershell
+        run: |
+          $failed = $false
+          foreach ($file in Get-ChildItem scripts -Filter *.ps1) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors)
+            foreach ($e in $errors) { $failed = $true; Write-Host "$($file.Name):$($e.Extent.StartLineNumber): $($e.Message)" }
+          }
+          if ($failed) { exit 1 }
+      - name: Release archives build
+        shell: powershell
+        run: scripts/build.ps1 -Version 0.0.0

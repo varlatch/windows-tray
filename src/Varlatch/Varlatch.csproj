@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The WinUI 3 app: tray icon, panel, settings, notifications. Unpackaged
+       and self-contained (with its own .NET and Windows App SDK), so it runs
+       from any folder without installing a runtime first. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <RootNamespace>Varlatch</RootNamespace>
+    <AssemblyName>Varlatch</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\Varlatch.ico</ApplicationIcon>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <!-- Puts the app's resources (Varlatch.pri, App.xbf) in what dotnet publish writes. -->
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <SelfContained>true</SelfContained>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Program.cs decides between this process and the one already running. -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <InformationalVersion Condition="'$(SourceRevision)' != ''">$(Version)+$(SourceRevision)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The Windows App SDK components the app uses, rather than the
+         Microsoft.WindowsAppSDK package, which brings its AI and machine
+         learning runtimes along too. -->
+    <PackageReference Include="Microsoft.WindowsAppSDK.Base" Version="2.0.4" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.12" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.9" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.DWrite" Version="2.1.0" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.5.1" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
+    <PackageReference Include="System.Drawing.Common" Version="10.0.12" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VarlatchKit\VarlatchKit.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\Varlatch.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\VarlatchLogo.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\TrayMark.png" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="Assets\TrayMark.png" LogicalName="TrayMark.png" />
+    <Content Include="..\..\scripts\install-cli.ps1" Link="Scripts\install-cli.ps1" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
