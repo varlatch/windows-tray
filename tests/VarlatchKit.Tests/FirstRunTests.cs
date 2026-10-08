@@ -27,7 +27,7 @@ public class ServerAddressTests
 
 public class CliInstallTests
 {
-    private readonly string dir = Path.Combine(Path.GetTempPath(), $"vl-install-{Guid.NewGuid():N}");
+    private readonly string dir = TestDirectory.Path("install");
 
     private string File(string path, string contents)
     {
@@ -122,7 +122,7 @@ public class ReleaseRulesTests
 
 public class ReleaseCheckerTests
 {
-    private readonly string path = Path.Combine(Path.GetTempPath(), $"vl-update-{Guid.NewGuid():N}.json");
+    private readonly string path = TestDirectory.Path("update") + ".json";
     private static readonly ReleaseVersion V0151 = new(0, 15, 1);
 
     private sealed class Fetches

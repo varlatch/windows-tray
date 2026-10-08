@@ -248,7 +248,7 @@ public class ServerMemoryTests
     [Fact]
     public void SavesAndLoads()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"vl-memory-{Guid.NewGuid():N}", "servers.json");
+        var path = Path.Combine(TestDirectory.Path("memory"), "servers.json");
         new ServerMemory(["https://a", "https://b"]).Save(path);
         Assert.Equal(new ServerMemory(["https://a", "https://b"]), ServerMemory.Load(path));
         Assert.Equal(new ServerMemory(), ServerMemory.Load(path + ".missing"));

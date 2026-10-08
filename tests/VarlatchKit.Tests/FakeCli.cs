@@ -15,7 +15,7 @@ public sealed class FakeCli
 
     public FakeCli()
     {
-        Dir = Path.Combine(Path.GetTempPath(), "vl-fake-" + Guid.NewGuid().ToString("N")[..12]);
+        Dir = TestDirectory.Path("fake");
         Directory.CreateDirectory(Dir);
     }
 

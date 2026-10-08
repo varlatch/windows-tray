@@ -271,7 +271,7 @@ public class PreferencesTests
     [Fact]
     public void SettingsFileKeepsOtherKeys()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"vl-settings-{Guid.NewGuid():N}", "settings.json");
+        var path = Path.Combine(TestDirectory.Path("settings"), "settings.json");
         var file = new SettingsFile(path);
         Assert.Equal(new Preferences(), file.Preferences);
         file.SetFlag("debugHooks", true);

@@ -32,7 +32,7 @@ public class CliLocatorTests
     [Fact]
     public void RunsTheScriptBehindAShim()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"vl-shim-{Guid.NewGuid():N}");
+        var dir = TestDirectory.Path("shim");
         Directory.CreateDirectory(dir);
         var shim = Path.Combine(dir, "varlatch.cmd");
         var script = Path.Combine(dir, "varlatch.cjs");
@@ -46,7 +46,7 @@ public class CliLocatorTests
     [Fact]
     public void ReadsNpmShims()
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"vl-npm-{Guid.NewGuid():N}");
+        var dir = TestDirectory.Path("npm");
         var script = Path.Combine(dir, @"node_modules\@varlatch\cli\dist\main.js");
         Directory.CreateDirectory(Path.GetDirectoryName(script)!);
         File.WriteAllText(script, "");
@@ -276,7 +276,7 @@ public class TerminalScriptTests
     {
         // Without the last line, which waits for Enter.
         var lines = TerminalScript.Build("Test", ["cmd.exe", "/c", "exit 3"]).Split('\n').Where(l => !l.Contains("Read-Host"));
-        var path = Path.Combine(Path.GetTempPath(), $"vl-term-{Guid.NewGuid():N}.ps1");
+        var path = TestDirectory.Path("term") + ".ps1";
         File.WriteAllText(path, string.Join('\n', lines));
         var result = await CliProcess.RunAsync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path],
                                                new Dictionary<string, string>(Environment.GetEnvironmentVariables()
