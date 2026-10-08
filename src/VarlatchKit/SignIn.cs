@@ -175,13 +175,19 @@ public sealed class SignInController : ObservableObject
             return null;
         }
         Begin(new SignInState.Browser(server, null));
-        var linkSeen = false;
+        // The link as the CLI printed it, from the thread that reads its output.
+        string? printed = null;
+        var gate = new object();
         var started = invocation.With(NoBrowserVariable, "1").Process(
             ["login", "--server", server, .. ttlArguments ?? []],
             stdout =>
             {
-                if (linkSeen || EnrollLink(stdout) is not { } link) return;
-                linkSeen = true;
+                string? link;
+                lock (gate)
+                {
+                    if (printed is not null || EnrollLink(stdout) is not { } found) return;
+                    link = printed = found;
+                }
                 Post(() => Found(link, server));
             });
         process = started;
@@ -194,6 +200,11 @@ public sealed class SignInController : ObservableObject
             var result = await started.WaitAsync();
             Post(() =>
             {
+                // A link printed before the end comes before the outcome,
+                // whichever of the two posts arrives first.
+                string? link;
+                lock (gate) link = printed;
+                if (link is not null) Found(link, server);
                 SignInOutcome outcome;
                 if (result.Succeeded) outcome = new SignInOutcome.SignedIn(server, Warning(result));
                 else if (result.Signaled && !result.TimedOut) outcome = new SignInOutcome.Cancelled(server);

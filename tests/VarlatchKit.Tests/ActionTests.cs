@@ -58,6 +58,24 @@ public class SignInTests
     }
 
     [Fact]
+    public async Task TheLinkComesBeforeTheOutcomeAlsoWhenTheCliEndsAtOnce()
+    {
+        // No wait between the address and the end: whichever is handled
+        // first, the app hears of the link once, and before the outcome.
+        for (var i = 0; i < 5; i++)
+        {
+            var events = new List<string>();
+            var invocation = fake.Invocation();
+            var controller = new SignInController(() => invocation);
+            controller.LinkFound += (_, _) => { lock (events) events.Add("link"); };
+            controller.Outcome += o => { lock (events) events.Add(o.GetType().Name); };
+            controller.SignIn("https://vl.example.com");
+            await controller.WaitUntilIdleAsync();
+            lock (events) Assert.Equal(["link", "SignedIn"], events);
+        }
+    }
+
+    [Fact]
     public async Task OneAtATimeAndASecondClickGivesTheLink()
     {
         fake.Set(new() { ["FAKE_LOGIN_SLEEP"] = "2" });

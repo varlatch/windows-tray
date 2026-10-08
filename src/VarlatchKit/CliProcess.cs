@@ -109,8 +109,8 @@ public sealed class CliProcess
         }
         JobObject.Shared.Add(process);
         process.StandardInput.Close();
-        var outTask = Read(process.StandardOutput, isStdout: true);
-        var errTask = Read(process.StandardError, isStdout: false);
+        var outTask = Reader(process.StandardOutput, isStdout: true);
+        var errTask = Reader(process.StandardError, isStdout: false);
         _ = Finish(outTask, errTask);
         if (timeout is { } limit)
         {
@@ -144,14 +144,25 @@ public sealed class CliProcess
     /// <summary>Completes once the process has exited.</summary>
     public Task<CliResult> WaitAsync() => completion.Task;
 
-    private async Task Read(StreamReader reader, bool isStdout)
+    /// <summary>
+    /// Reads one of the process's outputs on a thread of its own. The pipes
+    /// Windows gives a redirected process only read by blocking; on the
+    /// shared thread pool, a busy machine could hold a read back until the
+    /// process has exited, and the sign-in page's address would arrive after
+    /// the sign-in it belongs to had ended.
+    /// </summary>
+    private Task Reader(StreamReader reader, bool isStdout) =>
+        Task.Factory.StartNew(() => Read(reader, isStdout), CancellationToken.None,
+                              TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+    private void Read(StreamReader reader, bool isStdout)
     {
         var buffer = new char[4096];
         try
         {
             while (true)
             {
-                var n = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                var n = reader.Read(buffer, 0, buffer.Length);
                 if (n == 0) break;
                 string? snapshot = null;
                 lock (gate)
