@@ -39,6 +39,8 @@ fs.appendFileSync(path.join(dir, "calls.log"), `cli ${args.join(" ")}\n`);
 
 const out = (text) => process.stdout.write(text + "\n");
 const err = (text) => process.stderr.write(text + "\n");
+// A `--json` document as the CLI prints it: indented by two spaces, version first.
+const json = (fields) => JSON.stringify({ version: 1, ...fields }, null, 2);
 const sleep = (seconds) => new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 const read = (file) => {
   try {
@@ -89,7 +91,7 @@ async function main() {
       return 1;
     }
     const expires = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    out(JSON.stringify({ verificationUri: `${server || "https://vl.example.com"}/device`, userCode: "BCDF-GHJK", expiresAt: expires }));
+    out(json({ verificationUri: `${server || "https://vl.example.com"}/device`, userCode: "BCDF-GHJK", expiresAt: expires }));
     return 0;
   }
   if (mode === "wait") {
@@ -99,24 +101,24 @@ async function main() {
       case "pending-once":
         if (n === 1) {
           await sleep(1);
-          out('{"state":"pending"}');
+          out(json({ state: "pending" }));
           err("varlatch login: not approved yet.");
           return 75;
         }
         break;
       case "deny":
-        out('{"state":"denied"}');
+        out(json({ state: "denied" }));
         err("varlatch login: the sign-in was denied in the browser. Nothing was stored.");
         return 77;
       case "expire":
-        out('{"state":"expired"}');
+        out(json({ state: "expired" }));
         err("varlatch login: the sign-in expired before it was approved and collected (a code lasts 10 minutes). Nothing was stored.");
         return 77;
       case "hang":
         await sleep(600);
         return 75;
     }
-    out('{"state":"signed-in","credentialId":"crd_test","expiresAt":"2099-01-01T12:00:00Z"}');
+    out(json({ state: "signed-in", credentialId: "crd_test", expiresAt: "2099-01-01T12:00:00Z" }));
     return 0;
   }
 

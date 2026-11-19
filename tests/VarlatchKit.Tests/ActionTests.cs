@@ -346,6 +346,19 @@ public class DeviceSignInTests
         Assert.Equal("The sign-in code for vl.example.com expired before it was approved.", outcomes[0].Text);
     }
 
+    [Theory]
+    // As the CLI prints it: indented over several lines.
+    [InlineData("{\n  \"version\": 1,\n  \"state\": \"denied\"\n}\n", "denied")]
+    [InlineData("{\r\n  \"version\": 1,\r\n  \"state\": \"expired\"\r\n}\r\n", "expired")]
+    [InlineData("{\"state\":\"denied\"}", "denied")]
+    [InlineData("", null)]
+    [InlineData("}", null)]
+    [InlineData("[\"denied\"]", null)]
+    public void WaitStateReadsTheWholeDocument(string stdout, string? state)
+    {
+        Assert.Equal(state, SignInController.WaitState(stdout));
+    }
+
     [Fact]
     public async Task StartRefused()
     {
@@ -398,7 +411,8 @@ public class DeviceSignInTests
     public void WaitStates()
     {
         Assert.Equal("denied", SignInController.WaitState("""{"state":"denied"}"""));
-        Assert.Equal("expired", SignInController.WaitState("noise\n{\"state\":\"expired\"}\n"));
+        // As the CLI prints it (stdout holds the document alone; messages go to stderr).
+        Assert.Equal("expired", SignInController.WaitState("{\n  \"version\": 1,\n  \"state\": \"expired\"\n}\n"));
         Assert.Null(SignInController.WaitState(""));
     }
 }
