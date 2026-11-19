@@ -296,14 +296,18 @@ public sealed class SignInController : ObservableObject
         }
     }
 
-    /// <summary>The <c>state</c> in the last JSON line <c>--wait</c> printed.</summary>
+    /// <summary>
+    /// The <c>state</c> in the JSON document <c>--wait</c> printed. The CLI
+    /// prints it indented over several lines, so the whole output is the
+    /// document (each <c>--wait</c> is its own process with its own output).
+    /// </summary>
     internal static string? WaitState(string stdout)
     {
-        var line = stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
-        if (line is null) return null;
+        var text = stdout.Trim();
+        if (text.Length == 0) return null;
         try
         {
-            using var json = JsonDocument.Parse(line);
+            using var json = JsonDocument.Parse(text);
             return json.RootElement.ValueKind == JsonValueKind.Object
                    && json.RootElement.TryGetProperty("state", out var s) && s.ValueKind == JsonValueKind.String
                 ? s.GetString()
