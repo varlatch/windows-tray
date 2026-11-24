@@ -35,16 +35,18 @@ function New-Program([string]$Path, [string]$Reports, [switch]$BadSignature, [sw
     $key = "$Reports-$BadSignature-$BreaksInPlace"
     if (-not $exes[$key]) {
         $exes[$key] = Join-Path $root "program-$($exes.Count).exe"
+        $breaksLine = if ($BreaksInPlace) { 'if (Path.GetFileName(System.Reflection.Assembly.GetExecutingAssembly().Location) == "varlatch.exe") return 126;' } else { '' }
+        $verifyResult = if ($BadSignature) { '1' } else { '0' }
         Add-Type -OutputType ConsoleApplication -OutputAssembly $exes[$key] -TypeDefinition @"
 using System;
 using System.IO;
 static class Program$($exes.Count) {
     static int Main(string[] args) {
-        var self = Path.GetFileName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-        if ($("$BreaksInPlace".ToLowerInvariant()) && self == "varlatch.exe") return 126;
+        $breaksLine
         File.AppendAllText(@"$log", "native " + string.Join(" ", args) + "\n");
         if (args.Length > 0 && args[0] == "--version") Console.WriteLine("varlatch $Reports");
-        return args.Length > 0 && args[0] == "verify-release" && $("$BadSignature".ToLowerInvariant()) ? 1 : 0;
+        if (args.Length > 0 && args[0] == "verify-release") return $verifyResult;
+        return 0;
     }
 }
 "@
