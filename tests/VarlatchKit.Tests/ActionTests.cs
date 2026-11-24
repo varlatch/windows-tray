@@ -375,10 +375,12 @@ public class DeviceSignInTests
     {
         fake.Set(new() { ["FAKE_WAIT"] = "hang" });
         var (controller, outcomes) = Controller();
+        var started = DateTimeOffset.UtcNow;
         var task = controller.SignInFromAnotherDeviceAsync("https://vl.example.com");
         await WaitForCode(controller);
         controller.Cancel();
         await task;
+        Assert.True(DateTimeOffset.UtcNow - started < TimeSpan.FromSeconds(30), "CancelWhileWaiting must end promptly without waiting for --wait");
         Assert.Equal([new SignInOutcome.Cancelled("https://vl.example.com")], outcomes);
         Assert.True(controller.IsIdle);
     }

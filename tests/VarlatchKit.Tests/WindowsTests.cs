@@ -317,35 +317,54 @@ public class TerminalScriptTests
     [Fact]
     public async Task EncodedCommandRunsElevatedBootstrapWithDataPayload()
     {
-        var hostile = "a\u2019; exit 99 #";
-        var bootstrap = TerminalScript.BuildBootstrap("Test", ["cmd.exe", "/c", "echo", hostile]);
+        var fake = new FakeCli();
+        var node = new CliLocator(fake.System()).FindNode() ?? throw new InvalidOperationException("node.exe not found");
+        var dir = TestDirectory.Path("encoded-bootstrap");
+        Directory.CreateDirectory(dir);
+        var outFile = Path.Combine(dir, "arg.txt");
+        var marker = Path.Combine(dir, "pwned.txt");
+        var hostile = $"a\u2019; Set-Content -LiteralPath '{marker}' -Value pwned; exit 99 #";
+        string[] cmd = [node, "-e", "require('fs').writeFileSync(process.argv[1], process.argv[2], 'utf8')", outFile, hostile];
+
+        var bootstrap = TerminalScript.BuildBootstrap("Test", cmd);
         Assert.Contains("ConvertFrom-Json", bootstrap);
         Assert.DoesNotContain(hostile, bootstrap);
+        Assert.Equal(Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(bootstrap)),
+                     TerminalScript.EncodedCommand("Test", cmd));
+
         var noPause = string.Join('\n', bootstrap.Split('\n').Where(l => !l.Contains("Read-Host")));
         var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(noPause));
         var result = await CliProcess.RunAsync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
-                                               new Dictionary<string, string>(Environment.GetEnvironmentVariables()
-                                                   .Cast<System.Collections.DictionaryEntry>()
-                                                   .ToDictionary(e => (string)e.Key, e => (string?)e.Value ?? "")),
-                                               TimeSpan.FromSeconds(60));
+                                               fake.System().Environment, TimeSpan.FromSeconds(60));
+        Assert.True(result.Succeeded, $"exit={result.ExitCode} stdout={result.Stdout} stderr={result.Stderr}");
+        Assert.Equal(0, result.ExitCode);
         Assert.Contains("Done. You can close this window.", result.Stdout);
-        Assert.DoesNotContain("exit 99", result.Stderr);
+        Assert.False(File.Exists(marker));
+        Assert.Equal(hostile, File.ReadAllText(outFile, System.Text.Encoding.UTF8));
     }
 
     [Fact]
     public async Task CurlyQuotesCannotBreakOutInWindowsPowerShell()
     {
-        var hostile = "a\u2019; exit 99 #";
-        var lines = TerminalScript.Build("Test", ["cmd.exe", "/c", "echo", hostile]).Split('\n').Where(l => !l.Contains("Read-Host"));
-        var path = TestDirectory.Path("curly") + ".ps1";
+        var fake = new FakeCli();
+        var node = new CliLocator(fake.System()).FindNode() ?? throw new InvalidOperationException("node.exe not found");
+        var dir = TestDirectory.Path("curly-run");
+        Directory.CreateDirectory(dir);
+        var outFile = Path.Combine(dir, "arg.txt");
+        var marker = Path.Combine(dir, "pwned.txt");
+        var hostile = $"a\u2019; Set-Content -LiteralPath '{marker}' -Value pwned; exit 99 #";
+        string[] cmd = [node, "-e", "require('fs').writeFileSync(process.argv[1], process.argv[2], 'utf8')", outFile, hostile];
+
+        var lines = TerminalScript.Build("Test", cmd).Split('\n').Where(l => !l.Contains("Read-Host"));
+        var path = Path.Combine(dir, "curly.ps1");
         File.WriteAllText(path, string.Join('\n', lines), new System.Text.UTF8Encoding(true));
         var result = await CliProcess.RunAsync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path],
-                                               new Dictionary<string, string>(Environment.GetEnvironmentVariables()
-                                                   .Cast<System.Collections.DictionaryEntry>()
-                                                   .ToDictionary(e => (string)e.Key, e => (string?)e.Value ?? "")),
-                                               TimeSpan.FromSeconds(60));
+                                               fake.System().Environment, TimeSpan.FromSeconds(60));
+        Assert.True(result.Succeeded, $"exit={result.ExitCode} stdout={result.Stdout} stderr={result.Stderr}");
+        Assert.Equal(0, result.ExitCode);
         Assert.Contains("Done. You can close this window.", result.Stdout);
-        Assert.DoesNotContain("exit 99", result.Stderr);
+        Assert.False(File.Exists(marker));
+        Assert.Equal(hostile, File.ReadAllText(outFile, System.Text.Encoding.UTF8));
     }
 
     [Fact]
