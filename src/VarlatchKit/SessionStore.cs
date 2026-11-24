@@ -158,7 +158,7 @@ public sealed class SessionStore : ObservableObject
         if (next == old) return;
         Preferences = next;
         if (next.RefreshInterval != old.RefreshInterval && timer is not null) ScheduleTimer();
-        if (next.CliPath != old.CliPath)
+        if (next.CliPath != old.CliPath || next.MigratedCli != old.MigratedCli)
         {
             _ = Reread();
         }
@@ -391,7 +391,7 @@ public sealed class SessionStore : ObservableObject
 
     // The CLI
 
-    public CliLocator Locator => new(system, Preferences.CliPath);
+    public CliLocator Locator => new(system, Preferences.CliPath, Preferences.MigratedCli);
 
     /// <summary>
     /// The CLI and the environment to run it with, or null (with

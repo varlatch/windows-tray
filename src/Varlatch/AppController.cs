@@ -481,6 +481,10 @@ internal sealed class AppController
     /// <summary>A newer CLI release, with release checks on.</summary>
     public ReleaseVersion? AvailableRelease => Store.Preferences.CheckUpdates ? Releases.Available(Store.CliVersion) : null;
 
+    /// <summary>A native release (&gt;= 0.50.0) when known and eligible to replace the CLI at <paramref name="path"/> without Node.js.</summary>
+    public ReleaseVersion? NativeUpdateTargetWithoutNode(string path) =>
+        CliUpdate.NativeTargetWithoutNode(path, ReleaseVersion.Parse(Releases.Cache.Latest));
+
     public CliUpdateWay UpdateWay => CliUpdate.Way(CliInstall, Store.CliCommand, Store.CliVersion);
 
     /// <summary>Whether the app can update the CLI in Terminal.</summary>
@@ -500,17 +504,20 @@ internal sealed class AppController
             return;
         }
         IReadOnlyList<string> run = UpdateWay == CliUpdateWay.Installer
-            ? CliUpdate.Installer(Terminal.PowerShell, InstallScript, command.CodePath, version, command.Executable)
+            ? CliUpdate.Installer(Terminal.PowerShell, InstallScript, command.CodePath, version, command.Executable, Settings.Path)
             : [command.Executable, .. command.Prefix, "self-update", version.ToString()];
         RunUpdate(run, command.CodePath);
     }
 
     /// <summary>
-    /// Updates a varlatch.cjs that has no Node.js to run it to the latest
-    /// release, in Terminal: from 0.50, the CLI does not need Node.js.
+    /// Updates an eligible <c>varlatch.cjs</c> that has no Node.js to run it
+    /// to a resolved native release, in Terminal.
     /// </summary>
-    public void UpdateCliWithoutNode(string path) =>
-        RunUpdate(CliUpdate.Installer(Terminal.PowerShell, InstallScript, path, version: null, node: null), path);
+    public void UpdateCliWithoutNode(string path, ReleaseVersion target)
+    {
+        if (NativeUpdateTargetWithoutNode(path) is null) return;
+        RunUpdate(CliUpdate.Installer(Terminal.PowerShell, InstallScript, path, target, node: null, settingsPath: Settings.Path), path);
+    }
 
     private void RunUpdate(IReadOnlyList<string> command, string path)
     {

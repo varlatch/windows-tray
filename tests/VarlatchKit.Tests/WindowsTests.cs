@@ -36,17 +36,28 @@ public class CliLocatorTests
     [Fact]
     public void ASetPathToTheReplacedCli()
     {
+        // Mere presence of a sibling varlatch.exe must NOT override an explicit CLI path.
         foreach (var path in new[] { @"C:\tools\varlatch.cjs", @"C:\tools\varlatch.cmd" })
         {
-            var locator = new CliLocator(System(p => p == @"C:\tools\varlatch.exe"), path);
+            var withoutMigration = new CliLocator(System(p => p == @"C:\tools\varlatch.exe"), path);
+            Assert.Equal(new CliResolution.OverrideUnusable(path), withoutMigration.Resolve());
+        }
+        // Only after a recorded successful migration to that exact varlatch.exe.
+        foreach (var path in new[] { @"C:\tools\varlatch.cjs", @"C:\tools\varlatch.cmd" })
+        {
+            var locator = new CliLocator(System(p => p == @"C:\tools\varlatch.exe"), path, migratedCli: @"C:\tools\varlatch.exe");
             var found = Assert.IsType<CliResolution.Found>(locator.Resolve());
             Assert.Equal(@"C:\tools\varlatch.exe", found.Command.Executable);
         }
+        // A migration recorded for a different directory does not apply here.
+        Assert.Equal(new CliResolution.OverrideUnusable(@"C:\tools\varlatch.cjs"),
+                     new CliLocator(System(p => p == @"C:\tools\varlatch.exe"), @"C:\tools\varlatch.cjs", migratedCli: @"C:\other\varlatch.exe").Resolve());
         // Only for the file varlatch.exe takes the place of.
         Assert.Equal(new CliResolution.OverrideUnusable(@"C:\tools\other.cjs"),
-                     new CliLocator(System(p => p == @"C:\tools\varlatch.exe"), @"C:\tools\other.cjs").Resolve());
+                     new CliLocator(System(p => p == @"C:\tools\varlatch.exe"), @"C:\tools\other.cjs", migratedCli: @"C:\tools\varlatch.exe").Resolve());
         // One that is still there is used as it is set.
-        var kept = new CliLocator(System(p => p is @"C:\tools\varlatch.exe" or @"C:\tools\varlatch.cjs" or Node), @"C:\tools\varlatch.cjs");
+        var kept = new CliLocator(System(p => p is @"C:\tools\varlatch.exe" or @"C:\tools\varlatch.cjs" or Node),
+                                  @"C:\tools\varlatch.cjs", migratedCli: @"C:\tools\varlatch.exe");
         Assert.Equal(Node, Assert.IsType<CliResolution.Found>(kept.Resolve()).Command.Executable);
     }
 
@@ -287,6 +298,30 @@ public class TerminalScriptTests
         Assert.Equal("'it''s'", TerminalScript.Quote("it's"));
         Assert.Equal("self-update", TerminalScript.Display("self-update"));
         Assert.Equal(@"""C:\Program Files\nodejs\node.exe""", TerminalScript.Display(@"C:\Program Files\nodejs\node.exe"));
+        // Curly single-quote characters (U+2018..U+201B) that PowerShell also
+        // treats as quote delimiters must never appear unescaped in a literal.
+        foreach (var q in new[] { '\u2018', '\u2019', '\u201A', '\u201B' })
+        {
+            var quoted = TerminalScript.Quote($"a{q};calc");
+            Assert.DoesNotContain(q, quoted);
+            Assert.Contains($"[char]0x{(int)q:X4}", quoted);
+        }
+    }
+
+    [Fact]
+    public async Task CurlyQuotesCannotBreakOutInWindowsPowerShell()
+    {
+        var hostile = "a\u2019; exit 99 #";
+        var lines = TerminalScript.Build("Test", ["cmd.exe", "/c", "echo", hostile]).Split('\n').Where(l => !l.Contains("Read-Host"));
+        var path = TestDirectory.Path("curly") + ".ps1";
+        File.WriteAllText(path, string.Join('\n', lines), new System.Text.UTF8Encoding(true));
+        var result = await CliProcess.RunAsync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path],
+                                               new Dictionary<string, string>(Environment.GetEnvironmentVariables()
+                                                   .Cast<System.Collections.DictionaryEntry>()
+                                                   .ToDictionary(e => (string)e.Key, e => (string?)e.Value ?? "")),
+                                               TimeSpan.FromSeconds(60));
+        Assert.Contains("Done. You can close this window.", result.Stdout);
+        Assert.DoesNotContain("exit 99", result.Stderr);
     }
 
     [Fact]

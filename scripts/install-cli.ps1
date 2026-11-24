@@ -45,6 +45,8 @@ param(
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Programs\Varlatch'),
     # Varlatch.exe, told about the new CLI and asked to sign in.
     [string]$App,
+    # App settings.json, where a successful migration to varlatch.exe is recorded.
+    [string]$Settings,
     # Install without asking.
     [switch]$Yes,
     # Leave the user PATH alone.
@@ -75,7 +77,18 @@ function Confirm-Step([string]$Question, [bool]$Default) {
 function Update-SessionPath {
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $user = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $env:Path = (@($machine, $user, $env:Path) | Where-Object { $_ }) -join ';'
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $merged = foreach ($part in @($machine, $user, $env:Path)) {
+        if (-not $part) { continue }
+        foreach ($raw in ($part -split ';')) {
+            $entry = $raw.Trim()
+            if (-not $entry) { continue }
+            $key = $entry.TrimEnd('\')
+            if (-not $key) { $key = $entry }
+            if ($seen.Add($key)) { $entry }
+        }
+    }
+    $env:Path = $merged -join ';'
 }
 
 # "https://varlatch.example.com" from what a person typed, as the app does it.
@@ -89,11 +102,22 @@ function ConvertTo-ServerAddress([string]$Text) {
 
 function Get-HostName([string]$Url) { return ($Url -replace '^[^:]+://', '') -replace '/.*$', '' }
 
+# Strict release version validator (bounded length, no shell metacharacters).
+function ConvertTo-ReleaseVersion([string]$Text) {
+    if (-not $Text) { return $null }
+    $s = $Text.Trim()
+    if ($s.Length -eq 0 -or $s.Length -gt 64) { return $null }
+    if ($s -cnotmatch '^v?([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?)$') { return $null }
+    $v = $Matches[1]
+    if ($v -match '-\.' -or $v.EndsWith('.') -or $v.Contains('..')) { return $null }
+    return $v
+}
+
 # The version a server runs, from its anonymous /v1/meta.
 function Get-ServerVersion([string]$Url) {
     try {
         $meta = Invoke-RestMethod -Uri "$Url/v1/meta" -TimeoutSec 10 -UseBasicParsing
-        if ($meta.serverVersion -match '^\d+\.\d+\.\d+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$') { return $meta.serverVersion }
+        return ConvertTo-ReleaseVersion ([string]$meta.serverVersion)
     } catch { }
     return $null
 }
@@ -154,7 +178,7 @@ function Get-LatestRelease {
     try {
         $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -TimeoutSec 15 `
             -Headers @{ Accept = 'application/vnd.github+json' } -UserAgent $UserAgent -UseBasicParsing
-        return ($release.tag_name -replace '^v', '')
+        return ConvertTo-ReleaseVersion ([string]$release.tag_name)
     } catch { return $null }
 }
 
@@ -231,32 +255,46 @@ function Confirm-Node {
     if ((Get-NodeMajor) -lt 22) { Stop-Install 'Node.js 22 or newer is still not on the PATH. Open a new terminal and run this again.' }
 }
 
-# Puts a checked file in place: written next to it, then moved over it, so
-# there is never a half-written CLI. What was there is kept at $Backup.
-function Set-CheckedFile([string]$From, [string]$To, [string]$Hash, [string]$Backup) {
-    $next = Join-Path $InstallDir ".varlatch-new-$PID"
+# Publishes a staged file already inside $InstallDir over $To: re-hashes
+# $Staged in place, then replaces atomically with [IO.File]::Replace (keeping
+# what was there at $Backup).
+function Publish-StagedFile([string]$Staged, [string]$To, [string]$Hash, [string]$Backup) {
+    if ((Get-Sha256 $Staged) -cne $Hash) { Stop-Install "$(Split-Path -Leaf $Staged) changed after it was checked. Nothing was installed." }
     try {
-        Copy-Item -LiteralPath $From $next -Force
-        # What goes in place is what was checked.
-        if ((Get-Sha256 $next) -cne $Hash) { Stop-Install "$(Split-Path -Leaf $From) changed after it was checked. Nothing was installed." }
-        try {
-            if (Test-Path -LiteralPath $To) { [IO.File]::Replace($next, $To, $Backup) }
-            else { [IO.File]::Move($next, $To) }
-        } catch {
-            Stop-Install "could not write $To (is varlatch running?): $($_.Exception.Message)"
-        }
-    } finally {
-        Remove-Item -LiteralPath $next -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $To) { [IO.File]::Replace($Staged, $To, $Backup) }
+        else { [IO.File]::Move($Staged, $To) }
+    } catch {
+        Stop-Install "could not write $To (is varlatch running?): $($_.Exception.Message)"
     }
 }
 
-# varlatch.exe replaces the TypeScript CLI in its folder once it runs there:
-# varlatch.cjs, and the varlatch.cmd that runs it. Both use the same store of
-# sign-ins and settings.
+# varlatch.exe replaces the TypeScript CLI in its folder once it runs there,
+# ONLY when varlatch.cmd is absent or is the exact wrapper this installer
+# wrote, and no other file in the folder refers to varlatch.cjs.
 function Remove-TypeScriptCli {
+    $hasShim = Test-Path -LiteralPath $shim -PathType Leaf
+    $exactShim = $hasShim -and ([IO.File]::ReadAllText($shim).Trim() -ceq '@node "%~dp0varlatch.cjs" %*')
+    if ($hasShim -and -not $exactShim) {
+        Write-Host "varlatch.cmd in $InstallDir is not this installer's wrapper; leaving varlatch.cmd and varlatch.cjs in place."
+        return
+    }
+    $referrers = @()
+    foreach ($file in (Get-ChildItem -LiteralPath $InstallDir -File -ErrorAction SilentlyContinue)) {
+        if ($file.Name -ieq 'varlatch.cjs' -or $file.Name -ieq 'varlatch.exe' -or $file.Name -ieq 'varlatch.cmd') { continue }
+        if ($file.Length -gt 65536) { continue }
+        try {
+            if ([IO.File]::ReadAllText($file.FullName).IndexOf('varlatch.cjs', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                $referrers += $file.Name
+            }
+        } catch { }
+    }
+    if ($referrers.Count -gt 0) {
+        Write-Host "$($referrers -join ', ') in $InstallDir refers to varlatch.cjs; leaving varlatch.cjs in place."
+        return
+    }
     $left = @()
     $removed = $false
-    if ((Test-Path -LiteralPath $shim -PathType Leaf) -and [IO.File]::ReadAllText($shim).Trim() -ceq '@node "%~dp0varlatch.cjs" %*') {
+    if ($exactShim) {
         try { Remove-Item -LiteralPath $shim -Force -ErrorAction Stop; $removed = $true } catch { $left += 'varlatch.cmd' }
     }
     if (Test-TypeScriptCli $cjs) {
@@ -264,6 +302,24 @@ function Remove-TypeScriptCli {
     }
     if ($left) { Write-Host "$($left -join ' and ') in $InstallDir could not be removed (in use?). varlatch.exe comes before it; remove it later." }
     elseif ($removed) { Write-Host 'It replaces varlatch.cjs. Your sign-ins and settings carry over.' }
+}
+
+# Records a successful migration to varlatch.exe in the app's settings.json so
+# an explicit CLI path to the replaced varlatch.cjs/.cmd adopts it.
+function Save-MigratedCli([string]$SettingsPath, [string]$ExePath) {
+    if (-not $SettingsPath) { return }
+    try {
+        $dir = Split-Path -Parent $SettingsPath
+        if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        $obj = $null
+        if (Test-Path -LiteralPath $SettingsPath) {
+            try { $obj = Get-Content -LiteralPath $SettingsPath -Raw | ConvertFrom-Json } catch { $obj = $null }
+        }
+        if (-not $obj) { $obj = New-Object psobject }
+        $obj | Add-Member -NotePropertyName 'migratedCli' -NotePropertyValue $ExePath -Force
+        $json = ($obj | ConvertTo-Json -Depth 10) + "`n"
+        [IO.File]::WriteAllText($SettingsPath, $json, (New-Object System.Text.UTF8Encoding $false))
+    } catch { }
 }
 
 Write-Host $(if ($Update) { 'Update the Varlatch CLI' } else { 'Install the Varlatch CLI' }) -ForegroundColor Cyan
@@ -311,7 +367,9 @@ try {
     }
 
     if ($Version) {
-        $Version = $Version -replace '^v', ''
+        $parsed = ConvertTo-ReleaseVersion $Version
+        if (-not $parsed) { Stop-Install "invalid release version: '$Version'." }
+        $Version = $parsed
     } elseif ($serverUrl) {
         $hostName = Get-HostName $serverUrl
         $running = Get-ServerVersion $serverUrl
@@ -351,10 +409,11 @@ try {
 
     Write-Host ''
     Write-Host "Downloading $asset from $Repo..."
-    $staged = Join-Path $work $asset
-    if (-not (Get-ReleaseFile $Version $asset $staged)) { Stop-Install "download failed: $asset." }
+    $downloaded = Join-Path $work $asset
+    if (-not (Get-ReleaseFile $Version $asset $downloaded)) { Stop-Install "download failed: $asset." }
     $bundle = Join-Path $work 'SHA256SUMS.sigstore.json'
     $signed = Get-ReleaseFile $Version 'SHA256SUMS.sigstore.json' $bundle
+    $cosignVerified = $false
     $signature = 'none: this release carries no signature'
     if ($signed) {
         $signature = 'NOT checked: the release is signed, but cosign is not installed'
@@ -364,64 +423,91 @@ try {
                 --certificate-identity "https://github.com/$Repo/.github/workflows/release.yml@refs/tags/v$Version" `
                 --certificate-oidc-issuer https://token.actions.githubusercontent.com | Out-Null
             if ($LASTEXITCODE -ne 0) { Stop-Install 'the signature on SHA256SUMS does NOT verify. Nothing was installed.' }
-            $signature = "verified: signed by the $Repo release workflow for v$Version"
+            $cosignVerified = $true
+            $signature = "verified with cosign: signed by the $Repo release workflow for v$Version"
         }
     }
 
     # This asset's own line, which Get-ReleaseAsset found once.
     $expected = Get-ListedHash $sums $asset
-    if ((Get-Sha256 $staged) -cne $expected) { Stop-Install "$asset does not match SHA256SUMS. Nothing was installed." }
-
-    # A program must run here, and it checks the signature on SHA256SUMS
-    # itself, as Varlatch's install.ps1 has it do: every release with one is
-    # signed.
+    if ((Get-Sha256 $downloaded) -cne $expected) { Stop-Install "$asset does not match SHA256SUMS. Nothing was installed." }
     if ($native -and -not $signed) { Stop-Install "release $Version carries no signature. Nothing was installed." }
-    $global:LASTEXITCODE = -1
+
+    # Stage inside the destination directory (administrator-owned when
+    # elevated), hash THAT file, and test it THERE before asking or publishing.
+    $createdDir = -not (Test-Path -LiteralPath $InstallDir)
+    if ($createdDir) { New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null }
+    $stageExt = if ($native) { '.exe' } else { '.cjs' }
+    $staged = Join-Path $InstallDir ".varlatch-stage-$PID$stageExt"
     try {
-        $reported = if ($native) { Invoke-Quietly $staged --version } else { Invoke-Quietly node $staged --version }
-    } catch { $reported = '' }
-    if (-not (Test-Reported "$reported" $Version)) {
-        Stop-Install "the downloaded CLI reports `"$reported`", expected varlatch $Version. Nothing was installed."
-    }
-    if ($native) {
+        Copy-Item -LiteralPath $downloaded $staged -Force
+        if ((Get-Sha256 $staged) -cne $expected) { Stop-Install "$asset changed while staging. Nothing was installed." }
+
         $global:LASTEXITCODE = -1
-        Invoke-Quietly $staged verify-release --version $Version --sums $sums --bundle $bundle --file "$staged=$asset" | Out-Null
-        if ($LASTEXITCODE -ne 0) { Stop-Install 'the signature on SHA256SUMS does NOT verify. Nothing was installed.' }
-        $signature = "verified: signed by the $Repo release workflow for v$Version"
-    }
+        try {
+            $reported = if ($native) { Invoke-Quietly $staged --version } else { Invoke-Quietly node $staged --version }
+        } catch { $reported = '' }
+        if (-not (Test-Reported "$reported" $Version)) {
+            Stop-Install "the downloaded CLI reports `"$reported`", expected varlatch $Version. Nothing was installed."
+        }
+        if ($native) {
+            $global:LASTEXITCODE = -1
+            Invoke-Quietly $staged verify-release --version $Version --sums $sums --bundle $bundle --file "$staged=$asset" | Out-Null
+            if ($LASTEXITCODE -ne 0) { Stop-Install 'the signature on SHA256SUMS does NOT verify. Nothing was installed.' }
+            if (-not $cosignVerified) {
+                $signature = 'checked by the downloaded varlatch.exe (install cosign for an independent check)'
+            }
+        }
 
-    Write-Host ''
-    Write-Host "  varlatch $Version"
-    Write-Host "  install:   $target"
-    Write-Host '  checksum:  ok (SHA256SUMS)'
-    Write-Host "  signature: $signature"
-    Write-Host "  changes:   https://github.com/$Repo/releases/tag/v$Version"
-    Write-Host ''
-    if (-not (Confirm-Step 'Install?' $false)) {
-        Write-Host 'Nothing installed.'
-        exit 130
-    }
+        Write-Host ''
+        Write-Host "  varlatch $Version"
+        Write-Host "  install:   $target"
+        Write-Host '  checksum:  ok (SHA256SUMS)'
+        Write-Host "  signature: $signature"
+        Write-Host "  changes:   https://github.com/$Repo/releases/tag/v$Version"
+        Write-Host ''
+        if (-not (Confirm-Step 'Install?' $false)) {
+            Write-Host 'Nothing installed.'
+            exit 130
+        }
 
-    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    $had = Test-Path -LiteralPath $target
-    $backup = Join-Path $InstallDir "varlatch-old-$PID.bak"
-    Set-CheckedFile $staged $target $expected $backup
-    if (-not $native) { [IO.File]::WriteAllText($shim, "@node `"%~dp0varlatch.cjs`" %*`r`n", (New-Object System.Text.UTF8Encoding $false)) }
+        $had = Test-Path -LiteralPath $target
+        $backup = Join-Path $InstallDir "varlatch-old-$PID.bak"
+        Publish-StagedFile $staged $target $expected $backup
+        if (-not $native) { [IO.File]::WriteAllText($shim, "@node `"%~dp0varlatch.cjs`" %*`r`n", (New-Object System.Text.UTF8Encoding $false)) }
 
-    # What was there goes only once the new CLI runs in its place.
-    $global:LASTEXITCODE = -1
-    try {
-        $reported = if ($native) { Invoke-Quietly $target --version } else { Invoke-Quietly node $target --version }
-    } catch { $reported = '' }
-    if (-not (Test-Reported "$reported" $Version)) {
-        Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
-        if ($had) { [IO.File]::Move($backup, $target) }
-        if ($had -or (Test-TypeScriptCli $cjs)) { Stop-Install "the new CLI does not run at $target. The CLI that was there is left in place." }
-        Stop-Install "the new CLI does not run at $target. It was removed again."
+        # What was there goes only once the new CLI runs in its place.
+        $global:LASTEXITCODE = -1
+        try {
+            $reported = if ($native) { Invoke-Quietly $target --version } else { Invoke-Quietly node $target --version }
+        } catch { $reported = '' }
+        if (-not (Test-Reported "$reported" $Version)) {
+            if ($had) {
+                $failedCopy = Join-Path $InstallDir "varlatch-failed-$PID.bak"
+                try {
+                    [IO.File]::Replace($backup, $target, $failedCopy)
+                    Remove-Item -LiteralPath $failedCopy -Force -ErrorAction SilentlyContinue
+                } catch {
+                    Stop-Install "the new CLI does not run at $target, and the previous CLI could not be restored automatically (backup kept at $backup)."
+                }
+                Stop-Install "the new CLI does not run at $target. The CLI that was there is left in place."
+            }
+            Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+            if (Test-TypeScriptCli $cjs) { Stop-Install "the new CLI does not run at $target. The CLI that was there is left in place." }
+            Stop-Install "the new CLI does not run at $target. It was removed again."
+        }
+        if ($had) { Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue }
+        Write-Host "Installed: $reported"
+        if ($native) {
+            Remove-TypeScriptCli
+            if ($Update) { Save-MigratedCli $Settings $target }
+        }
+    } finally {
+        Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+        if ($createdDir -and (Test-Path -LiteralPath $InstallDir) -and -not (Get-ChildItem -Force -LiteralPath $InstallDir -ErrorAction SilentlyContinue)) {
+            Remove-Item -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue
+        }
     }
-    if ($had) { Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue }
-    Write-Host "Installed: $reported"
-    if ($native) { Remove-TypeScriptCli }
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }

@@ -26,7 +26,7 @@ $exes = @{}
 function New-Program([string]$Path, [string]$Reports, [switch]$BadSignature, [switch]$BreaksInPlace) {
     $log = Join-Path $root 'calls.log'
     if ($onLinux) {
-        $breaks = if ($BreaksInPlace) { 'case $0 in *-windows-*) ;; *) exit 126 ;; esac' } else { '' }
+        $breaks = if ($BreaksInPlace) { 'case "$(basename "$0")" in varlatch.exe) exit 126 ;; esac' } else { '' }
         $signature = if ($BadSignature) { 1 } else { 0 }
         [IO.File]::WriteAllText($Path, "#!/bin/sh`n$breaks`necho `"native `$*`" >> '$log'`n[ `"`$1`" = --version ] && echo 'varlatch $Reports'`n[ `"`$1`" = verify-release ] && exit $signature`nexit 0`n")
         chmod 755 $Path
@@ -107,7 +107,7 @@ function Invoke-Installer([hashtable]$With, [string[]]$Answers = @(), [string]$L
     }
     Remove-Item (Join-Path $root 'calls.log') -ErrorAction SilentlyContinue
     $global:LASTEXITCODE = 0
-    $script:output = (& $installer @With -NoPath *>&1 | Out-String)
+    $script:output = (& $installer @With -NoPath *>&1 | Out-String -Width 4096)
     $script:code = $LASTEXITCODE
 }
 
@@ -133,6 +133,7 @@ function Names { return (Get-ChildItem -Force $cli -ErrorAction SilentlyContinue
 
 New-Item -ItemType Directory -Path $root | Out-Null
 $architecture = $env:PROCESSOR_ARCHITECTURE, $env:PROCESSOR_ARCHITEW6432
+$savedPath = $env:Path
 try {
     $env:PROCESSOR_ARCHITECTURE = 'AMD64'
     $env:PROCESSOR_ARCHITEW6432 = ''
@@ -140,15 +141,17 @@ try {
     Reset-Test; New-Release '9.9.8'
     Invoke-Installer @{ InstallDir = $cli } -Answers '', 'y' -Latest '9.9.8'
     Check 'a release with the single file: varlatch.cjs and its shim' ($code -eq 0 -and (Names) -eq 'varlatch.cjs varlatch.cmd')
+    $pathAfterFirst = $env:Path
     Invoke-Installer @{ InstallDir = $cli } -Latest '9.9.8'
     Check 'already installed: nothing is asked' ($code -eq 0 -and $output -match 'already installed')
+    Check 'running the installer again does not grow PATH' ($env:Path.Length -eq $pathAfterFirst.Length)
     Invoke-Installer @{ InstallDir = $cli; Version = '9.9.8'; Yes = $true }
     Check 'installed again over it' ($code -eq 0 -and (Names) -eq 'varlatch.cjs varlatch.cmd')
 
     Reset-Test; New-Release '10.0.0' -Native
     Invoke-Installer @{ InstallDir = $cli } -Answers '', 'y' -Latest '10.0.0'
     Check 'a native release: varlatch.exe' ($code -eq 0 -and (Names) -eq 'varlatch.exe' -and (Version $exe) -eq 'varlatch 10.0.0')
-    Check 'it checked the signature of the release' ($output -match 'signature: verified' -and (Calls) -match 'native verify-release --version 10\.0\.0 --sums .*SHA256SUMS --bundle .*SHA256SUMS\.sigstore\.json --file .*=varlatch-10\.0\.0-windows-amd64\.exe')
+    Check 'it checked the signature of the release (bootstrap wording without cosign)' ($output -match 'checked by the downloaded varlatch\.exe \(install cosign for an independent check\)' -and (Calls) -match 'native verify-release --version 10\.0\.0 --sums .*SHA256SUMS --bundle .*SHA256SUMS\.sigstore\.json --file .*=varlatch-10\.0\.0-windows-amd64\.exe')
     Invoke-Installer @{ InstallDir = $cli } -Latest '10.0.0'
     Check 'varlatch.exe already installed' ($code -eq 0 -and $output -match 'already installed: .*varlatch 10\.0\.0')
     Invoke-Installer @{ InstallDir = $cli; Version = '10.0.0'; Yes = $true }
@@ -215,7 +218,20 @@ try {
     Check 'through its shim, to the latest release' ($code -eq 0 -and (Names) -eq 'varlatch.exe')
     Reset-Test; Add-TypeScriptCli; New-Release '10.0.0' -Native; [IO.File]::WriteAllText($shim, "@echo mine`r`n")
     Invoke-Installer @{ Update = $cjs; Version = '10.0.0'; Yes = $true }
-    Check 'a varlatch.cmd of another kind stays' ($code -eq 0 -and (Names) -eq 'varlatch.cmd varlatch.exe')
+    Check 'a varlatch.cmd of another kind keeps both varlatch.cmd and varlatch.cjs' ($code -eq 0 -and (Names) -eq 'varlatch.cjs varlatch.cmd varlatch.exe')
+    Reset-Test; Add-TypeScriptCli; New-Release '10.0.0' -Native
+    [IO.File]::WriteAllText((Join-Path $cli 'helper.cmd'), "@node `"%~dp0varlatch.cjs`" %*`r`n")
+    Invoke-Installer @{ Update = $cjs; Version = '10.0.0'; Yes = $true }
+    Check 'another wrapper referencing varlatch.cjs keeps varlatch.cjs' ($code -eq 0 -and (Names) -eq 'helper.cmd varlatch.cjs varlatch.cmd varlatch.exe')
+    Reset-Test; Add-TypeScriptCli; New-Release '10.0.0' -Native
+    $settingsFile = Join-Path $root 'settings.json'
+    [IO.File]::WriteAllText($settingsFile, '{"cliPath":"C:\\old\\varlatch.cjs"}')
+    Invoke-Installer @{ Update = $cjs; Version = '10.0.0'; Settings = $settingsFile; Yes = $true }
+    $savedSettings = Get-Content -LiteralPath $settingsFile -Raw | ConvertFrom-Json
+    Check 'update with -Settings records migratedCli on success' ($code -eq 0 -and $savedSettings.migratedCli -eq $exe -and $savedSettings.cliPath -eq 'C:\old\varlatch.cjs')
+    Reset-Test; New-Release '10.0.0' -Native
+    Invoke-Installer @{ InstallDir = $cli; Version = '10.0.0;calc'; Yes = $true }
+    Check 'a hostile -Version is rejected' ($code -eq 1 -and $output -match 'invalid release version' -and -not (Names))
     Reset-Test; Add-TypeScriptCli; New-Release '10.0.0' -Native -BreaksInPlace
     Invoke-Installer @{ Update = $cjs; Version = '10.0.0'; Yes = $true }
     Check 'the new one does not run in its place: the CLI stays' ($code -eq 1 -and (Names) -eq 'varlatch.cjs varlatch.cmd' -and $output -match 'left in place')
@@ -238,6 +254,7 @@ try {
     Check 'a varlatch.exe that was there comes back' ($code -eq 1 -and (Names) -eq 'varlatch.exe' -and (Version $exe) -eq 'varlatch 10.0.0')
 } finally {
     $env:PROCESSOR_ARCHITECTURE, $env:PROCESSOR_ARCHITEW6432 = $architecture
+    $env:Path = $savedPath
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     Remove-Item function:global:Invoke-WebRequest, function:global:Invoke-RestMethod, function:global:Read-Host -ErrorAction SilentlyContinue
 }

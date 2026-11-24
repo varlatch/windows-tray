@@ -119,7 +119,7 @@ public static class PathDirectories
 /// (<c>%LOCALAPPDATA%\Programs\Varlatch</c>: <c>varlatch.exe</c>, or the
 /// <c>varlatch.cjs</c> it replaces), else <c>varlatch</c> on the <c>PATH</c>.
 /// </summary>
-public sealed class CliLocator(SystemContext system, string? overridePath = null)
+public sealed class CliLocator(SystemContext system, string? overridePath = null, string? migratedCli = null)
 {
     private static readonly string[] PathExtensions = [".exe", ".cmd", ".bat"];
 
@@ -140,7 +140,8 @@ public sealed class CliLocator(SystemContext system, string? overridePath = null
         if (!string.IsNullOrEmpty(raw))
         {
             var path = Expand(raw);
-            // varlatch.exe takes the place of the varlatch.cjs and its shim.
+            // Only adopt a sibling varlatch.exe after a recorded successful
+            // migration, never from mere presence on disk.
             if (!system.FileExists(path) && Replacement(path) is { } native) path = native;
             if (!system.FileExists(path)) return new CliResolution.OverrideUnusable(path);
             return Command(path) ?? (CliResolution)new CliResolution.OverrideUnusable(path);
@@ -160,12 +161,34 @@ public sealed class CliLocator(SystemContext system, string? overridePath = null
         return new CliResolution.NotFound([installed, OnPathDescription]);
     }
 
-    /// <summary>The varlatch.exe beside a varlatch.cjs or varlatch.cmd that it replaced.</summary>
+    /// <summary>
+    /// The <c>varlatch.exe</c> beside a replaced <c>varlatch.cjs</c> or
+    /// <c>varlatch.cmd</c>, only when a successful migration to that exact
+    /// executable was recorded in settings.
+    /// </summary>
     private string? Replacement(string path)
     {
+        if (string.IsNullOrWhiteSpace(migratedCli)) return null;
         if (System.IO.Path.GetFileName(path).ToLowerInvariant() is not ("varlatch.cjs" or "varlatch.cmd")) return null;
         var native = System.IO.Path.ChangeExtension(path, ".exe");
+        var recorded = Expand(migratedCli.Trim().Trim('"'));
+        if (!PathsEqual(native, recorded)) return null;
         return system.FileExists(native) ? native : null;
+    }
+
+    private static bool PathsEqual(string a, string b)
+    {
+        try
+        {
+            return string.Equals(
+                System.IO.Path.GetFullPath(a).Replace('/', '\\'),
+                System.IO.Path.GetFullPath(b).Replace('/', '\\'),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return string.Equals(a.Replace('/', '\\'), b.Replace('/', '\\'), StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>How to run the CLI at <paramref name="path"/>; null when Windows cannot run it.</summary>

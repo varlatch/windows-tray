@@ -124,10 +124,44 @@ public class CliUpdateTests
     public void TheInstallScriptsCommand()
     {
         Assert.Equal(["ps", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "s.ps1", "-Update", @"C:\v\varlatch.cjs",
-                      "-Version", "0.50.0", "-Node", @"C:\node\node.exe"],
-                     CliUpdate.Installer("ps", "s.ps1", @"C:\v\varlatch.cjs", ReleaseVersion.Parse("0.50.0"), @"C:\node\node.exe"));
+                      "-Version", "0.50.0", "-Node", @"C:\node\node.exe", "-Settings", @"C:\s\settings.json"],
+                     CliUpdate.Installer("ps", "s.ps1", @"C:\v\varlatch.cjs", ReleaseVersion.Parse("0.50.0"), @"C:\node\node.exe", @"C:\s\settings.json"));
         Assert.Equal(["ps", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "s.ps1", "-Update", @"C:\v\varlatch.cjs"],
                      CliUpdate.Installer("ps", "s.ps1", @"C:\v\varlatch.cjs", null, null));
+    }
+
+    [Fact]
+    public void NativeTargetWithoutNodeEnforcesEligibilityAndNativeTarget()
+    {
+        var dir = TestDirectory.Path("nonode-elig");
+        Directory.CreateDirectory(dir);
+        var cjs = Path.Combine(dir, "varlatch.cjs");
+        File.WriteAllText(cjs, "#!/usr/bin/env node\n/*! Varlatch CLI. Copyright 2026 Robotsson. */\n");
+        var shim = Path.Combine(dir, "varlatch.cmd");
+        File.WriteAllText(shim, "@node \"%~dp0varlatch.cjs\" %*\r\n");
+        var other = Path.Combine(dir, "other.cjs");
+        File.WriteAllText(other, "#!/usr/bin/env node\n/*! Varlatch CLI. Copyright 2026 Robotsson. */\n");
+        var custom = Path.Combine(dir, "custom", "varlatch.cjs");
+        Directory.CreateDirectory(Path.GetDirectoryName(custom)!);
+        File.WriteAllText(custom, "console.log(1);\n");
+        var checkoutDir = Path.Combine(dir, "repo");
+        Directory.CreateDirectory(Path.Combine(checkoutDir, ".git"));
+        var checkoutCli = Path.Combine(checkoutDir, "varlatch.cjs");
+        File.WriteAllText(checkoutCli, "/*! Varlatch CLI. */\n");
+
+        var v23 = ReleaseVersion.Parse("0.23.0");
+        var v50 = ReleaseVersion.Parse("0.50.0");
+
+        // No native target resolved (< 0.50.0 or null): ineligible.
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, null));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, v23));
+        // Eligible with a native target:
+        Assert.Equal(v50, CliUpdate.NativeTargetWithoutNode(cjs, v50));
+        Assert.Equal(v50, CliUpdate.NativeTargetWithoutNode(shim, v50));
+        // Wrong filename, custom script, or checkout: ineligible.
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(other, v50));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(custom, v50));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(checkoutCli, v50));
     }
 
     [Fact]

@@ -25,7 +25,43 @@ public static class CliUpdate
         if (kind != CliInstallKind.Release || command is null || version is not { } v) return CliUpdateWay.Manual;
         // Older CLIs have no self-update, and development builds refuse it.
         if (v < ReleaseVersion.SelfUpdate || v.Suffix.EndsWith("dev", StringComparison.Ordinal)) return CliUpdateWay.Manual;
-        return command.Script is null ? CliUpdateWay.SelfUpdate : CliUpdateWay.Installer;
+        if (command.Script is null) return CliUpdateWay.SelfUpdate;
+        // The install script replaces varlatch.cjs (directly or via its shim) only.
+        if (!Path.GetFileName(command.CodePath).Equals("varlatch.cjs", StringComparison.OrdinalIgnoreCase))
+            return CliUpdateWay.Manual;
+        return CliUpdateWay.Installer;
+    }
+
+    /// <summary>
+    /// Resolves a native target release when a CLI cannot run because Node.js
+    /// is missing or too old: applies the same eligibility checks as a normal
+    /// update (release build, not checkout/winget/custom, named
+    /// <c>varlatch.cjs</c> or its <c>varlatch.cmd</c> shim) and requires a
+    /// resolved native target (&gt;= 0.50.0). Returns null otherwise.
+    /// </summary>
+    public static ReleaseVersion? NativeTargetWithoutNode(string path, ReleaseVersion? latestRelease, Func<string, bool>? fileExists = null)
+    {
+        if (latestRelease is not { } target || target < ReleaseVersion.NativeCli) return null;
+        var exists = fileExists ?? File.Exists;
+        var name = Path.GetFileName(path);
+        string scriptPath;
+        if (name.Equals("varlatch.cjs", StringComparison.OrdinalIgnoreCase))
+        {
+            scriptPath = path;
+        }
+        else if (name.Equals("varlatch.cmd", StringComparison.OrdinalIgnoreCase))
+        {
+            if (Shim.Script(path, exists) is not { } s || !Path.GetFileName(s).Equals("varlatch.cjs", StringComparison.OrdinalIgnoreCase))
+                return null;
+            scriptPath = s;
+        }
+        else
+        {
+            return null;
+        }
+        if (!exists(scriptPath)) return null;
+        var command = new CliCommand(path, "node.exe", [scriptPath], scriptPath);
+        return CliInstall.Kind(command) == CliInstallKind.Release ? target : null;
     }
 
     /// <summary>
@@ -34,12 +70,14 @@ public static class CliUpdate
     /// Windows PowerShell.
     /// </summary>
     /// <param name="node">The node.exe that runs it, when there is one.</param>
+    /// <param name="settingsPath">settings.json where a successful migration is recorded.</param>
     public static IReadOnlyList<string> Installer(string powerShell, string script, string path,
-                                                  ReleaseVersion? version, string? node)
+                                                  ReleaseVersion? version, string? node, string? settingsPath = null)
     {
         List<string> command = [powerShell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Update", path];
         if (version is { } v) command.AddRange(["-Version", v.ToString()]);
         if (node is not null) command.AddRange(["-Node", node]);
+        if (!string.IsNullOrEmpty(settingsPath)) command.AddRange(["-Settings", settingsPath]);
         return command;
     }
 }

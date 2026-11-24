@@ -295,6 +295,13 @@ public class VersionTests
         Assert.Equal(new ReleaseVersion(0, 16, 0, "rc.1"), ReleaseVersion.Parse("v0.16.0-rc.1"));
         Assert.Null(ReleaseVersion.Parse("0.15"));
         Assert.Null(ReleaseVersion.Parse("0.15.x"));
+        // Strict validation: hostile tags, quotes, spaces, empty segments, and overlong strings are rejected.
+        Assert.Null(ReleaseVersion.Parse("0.50.0-rc.1;calc"));
+        Assert.Null(ReleaseVersion.Parse("0.50.0-rc.1'"));
+        Assert.Null(ReleaseVersion.Parse("0.50.0-rc.1\u2019;calc"));
+        Assert.Null(ReleaseVersion.Parse("0.50.0-"));
+        Assert.Null(ReleaseVersion.Parse("0.50.0-rc..1"));
+        Assert.Null(ReleaseVersion.Parse("0.50.0-" + new string('a', 64)));
         Assert.Equal("0.16.0-rc.1", new ReleaseVersion(0, 16, 0, "rc.1").ToString());
         Assert.Equal("0.15.1", new ReleaseVersion(0, 15, 1).ToString());
     }
@@ -306,6 +313,7 @@ public class VersionTests
         Assert.True(new ReleaseVersion(0, 14, 0) >= ReleaseVersion.DeviceSignIn);
         Assert.True(new ReleaseVersion(0, 13, 9) < ReleaseVersion.DeviceSignIn);
         Assert.True(new ReleaseVersion(0, 16, 0, "rc.1") < new ReleaseVersion(0, 16, 0));
+        Assert.True(new ReleaseVersion(0, 50, 0, "rc.9") < new ReleaseVersion(0, 50, 0, "rc.10"));
         Assert.True(new ReleaseVersion(1, 0, 0) > new ReleaseVersion(0, 99, 99));
         Assert.Equal(new ReleaseVersion(0, 15, 1), ReleaseVersion.Parse("0.15.1"));
         Assert.NotEqual(new ReleaseVersion(0, 16, 0), new ReleaseVersion(0, 16, 0, "rc.1"));

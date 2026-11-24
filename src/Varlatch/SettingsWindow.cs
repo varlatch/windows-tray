@@ -200,15 +200,18 @@ internal sealed class SettingsWindow : Window
         if (loading) return;
         var hours = sessionLength.SelectedItem is ComboBoxItem { Tag: int h } ? h : 0;
         var seconds = double.IsNaN(interval.Value) ? Preferences.DefaultRefreshInterval : (int)interval.Value;
+        var nextCliPath = cliPath.Text.Trim();
+        var migrated = nextCliPath == app.Store.Preferences.CliPath ? app.Store.Preferences.MigratedCli : "";
         app.Save(new Preferences(
             refreshInterval: seconds,
-            cliPath: cliPath.Text.Trim(),
+            cliPath: nextCliPath,
             notifyExpiry: notifyExpiry.IsOn,
             showWhenLoggedOut: showWhenLoggedOut.IsOn,
             showLocalhost: showLocalhost.IsOn,
             sessionHours: hours,
             checkUpdates: checkUpdates.IsOn,
-            launchAtLogin: launchAtLogin.IsOn));
+            launchAtLogin: launchAtLogin.IsOn,
+            migratedCli: migrated));
         Refresh();
     }
 

@@ -78,11 +78,13 @@ for the latest release). Releases from 0.50 ship `varlatch.exe`, a
 standalone program that needs no Node.js; releases before 0.50 ship
 `varlatch.cjs`, which runs on Node.js 22 or newer (when that is missing,
 the terminal offers to install it with winget, `OpenJS.NodeJS.LTS`). The
-script checks the download against `SHA256SUMS` and its signature (with
-`varlatch.exe` verifying the release signature itself, and
-[cosign](https://docs.sigstore.dev/cosign/) when installed), checks the
-version it reports, shows what it checked, installs only once you confirm,
-and offers the first sign-in, which the panel then shows:
+script downloads over HTTPS from GitHub, checks the file's SHA-256 against
+`SHA256SUMS`, verifies the Sigstore signature independently when
+[cosign](https://docs.sigstore.dev/cosign/) is installed (and without
+cosign, `varlatch.exe` runs its own `verify-release` bootstrap check, not
+an independent check), checks the version it reports, shows what it
+checked, installs only once you confirm, and offers the first sign-in,
+which the panel then shows:
 
 ```text
 %LOCALAPPDATA%\Programs\Varlatch\varlatch.exe   the CLI (0.50 and later)
@@ -93,10 +95,10 @@ and offers the first sign-in, which the panel then shows:
 It also puts that directory on your user `PATH`, so `varlatch` works in new
 terminals, as the Varlatch docs install it on Windows.
 
-With a `varlatch.cjs` CLI and no Node.js 22 or newer, the panel offers to
-install Node.js with winget in a terminal (or links to nodejs.org without
-winget) or **Update the CLI** to the latest release (from 0.50 it does not
-need Node.js), and picks the CLI up once it can run.
+With a release `varlatch.cjs` CLI and no Node.js 22 or newer, the panel
+offers to install Node.js with winget in a terminal (or links to
+nodejs.org without winget), and once a 0.50 or newer release is known,
+also offers **Update the CLI** to move to `varlatch.exe` without Node.js.
 
 With the CLI but no server known yet, the panel asks for the server's
 address (`varlatch.example.com`; `https://` is added when no scheme is
@@ -185,8 +187,9 @@ reads it again when it changes, so it can be edited by hand too:
 - **CLI path** (automatic): the CLI to run, for one installed somewhere
   else or a development build. **Browse…** picks the file. A `.cjs` or
   `.js` file runs with Node.js; a `.cmd`, `.exe`, or `.ps1` runs as it is.
-  If a `varlatch.cjs` or `varlatch.cmd` path is later replaced by
-  `varlatch.exe` in the same folder, the app uses `varlatch.exe`.
+  If the installer migrates a configured `varlatch.cjs` or `varlatch.cmd`
+  to `varlatch.exe` in the same folder and records that migration in
+  `settings.json`, the app follows it to `varlatch.exe`.
 - **Check for new CLI releases** (off).
 
 ## Finding the CLI

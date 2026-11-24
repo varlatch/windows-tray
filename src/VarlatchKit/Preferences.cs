@@ -16,6 +16,7 @@ public sealed record Preferences
         public const string SessionHours = "sessionHours";
         public const string CheckUpdates = "checkUpdates";
         public const string LaunchAtLogin = "launchAtLogin";
+        public const string MigratedCli = "migratedCli";
     }
 
     public const int DefaultRefreshInterval = 30;
@@ -23,7 +24,7 @@ public sealed record Preferences
 
     public Preferences(int refreshInterval = DefaultRefreshInterval, string cliPath = "", bool notifyExpiry = true,
                        bool showWhenLoggedOut = true, bool showLocalhost = false, int sessionHours = 0,
-                       bool checkUpdates = false, bool launchAtLogin = true)
+                       bool checkUpdates = false, bool launchAtLogin = true, string migratedCli = "")
     {
         RefreshInterval = Math.Max(MinimumRefreshInterval, refreshInterval);
         CliPath = cliPath;
@@ -33,6 +34,7 @@ public sealed record Preferences
         SessionHours = sessionHours is >= 1 and <= 24 ? sessionHours : 0;
         CheckUpdates = checkUpdates;
         LaunchAtLogin = launchAtLogin;
+        MigratedCli = migratedCli;
     }
 
     /// <summary>Seconds between status reads, 15 or more.</summary>
@@ -40,6 +42,13 @@ public sealed record Preferences
 
     /// <summary>The CLI to run; empty finds it automatically.</summary>
     public string CliPath { get; }
+
+    /// <summary>
+    /// The <c>varlatch.exe</c> recorded after a successful migration from
+    /// <c>varlatch.cjs</c>, so an explicit CLI path to the replaced script or
+    /// shim adopts it only when migrated here.
+    /// </summary>
+    public string MigratedCli { get; }
 
     public bool NotifyExpiry { get; }
 
@@ -71,7 +80,8 @@ public sealed record Preferences
             showLocalhost: Bool(Key.ShowLocalhost, d.ShowLocalhost),
             sessionHours: Int(Key.SessionHours, d.SessionHours),
             checkUpdates: Bool(Key.CheckUpdates, d.CheckUpdates),
-            launchAtLogin: Bool(Key.LaunchAtLogin, d.LaunchAtLogin));
+            launchAtLogin: Bool(Key.LaunchAtLogin, d.LaunchAtLogin),
+            migratedCli: Text(Key.MigratedCli, d.MigratedCli));
 
         bool Bool(string key, bool fallback) =>
             settings[key] is JsonValue v && v.TryGetValue<bool>(out var b) ? b : fallback;
@@ -94,6 +104,8 @@ public sealed record Preferences
         settings[Key.SessionHours] = SessionHours;
         settings[Key.CheckUpdates] = CheckUpdates;
         settings[Key.LaunchAtLogin] = LaunchAtLogin;
+        if (MigratedCli.Length > 0) settings[Key.MigratedCli] = MigratedCli;
+        else settings.Remove(Key.MigratedCli);
     }
 }
 
