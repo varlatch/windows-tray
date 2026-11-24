@@ -204,8 +204,8 @@ internal sealed class PanelView
                     Abbreviated(unusable.Path), error: true, Button("Settings", app.OpenSettings)));
                 yield break;
             case CliState.NodeMissing node:
-                var nativeTarget = app.NativeUpdateTargetWithoutNode(node.Path);
-                yield return Cached($"node:{node.Path}:{node.Found}:{nativeTarget}", () => NodeView(node, nativeTarget));
+                var nativeTarget = app.NativeUpdateTargetWithoutNode(node);
+                yield return Cached($"node:{node.Path}:{node.Script}:{node.Found}:{nativeTarget}", () => NodeView(node, nativeTarget));
                 yield break;
             case CliState.Unsupported:
                 yield return Cached("unsupported", () => Message(Glyphs.Warning, "This varlatch CLI is too old",
@@ -341,7 +341,7 @@ internal sealed class PanelView
         if (nativeTarget is { } target)
         {
             var detail = $"This varlatch CLI runs on Node.js 22 or newer{wingetText} Varlatch {target} does not need Node.js.";
-            return Message(Glyphs.Code, title, detail, false, install, Button("Update the CLI", () => app.UpdateCliWithoutNode(node.Path, target)));
+            return Message(Glyphs.Code, title, detail, false, install, Button("Update the CLI", () => app.UpdateCliWithoutNode(node, target)));
         }
         return Message(Glyphs.Code, title, $"The varlatch CLI runs on Node.js 22 or newer{wingetText}", false, install);
     }

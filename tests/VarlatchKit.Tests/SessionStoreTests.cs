@@ -108,7 +108,7 @@ public class SessionStoreTests
         var system = fake.System(fileExists: p => p == FakeCli.ScriptPath);
         var store = new SessionStore(new Preferences(cliPath: FakeCli.ScriptPath), system);
         await store.RefreshAsync();
-        Assert.Equal(new CliState.NodeMissing(FakeCli.ScriptPath), store.CliState);
+        Assert.Equal(new CliState.NodeMissing(FakeCli.ScriptPath, FakeCli.ScriptPath), store.CliState);
         Assert.Equal(OverallState.Unavailable, store.Overall());
     }
 
@@ -117,7 +117,7 @@ public class SessionStoreTests
     {
         var command = new CliCommand(@"C:\x\varlatch.cjs", @"C:\node\node.exe", [@"C:\x\varlatch.cjs"], @"C:\x\varlatch.cjs");
         var failed = new CliResult(1, Stderr: "SyntaxError: Unexpected token\n");
-        Assert.Equal(new CliState.NodeMissing(@"C:\x\varlatch.cjs", "v18.20.4"),
+        Assert.Equal(new CliState.NodeMissing(@"C:\x\varlatch.cjs", @"C:\x\varlatch.cjs", "v18.20.4"),
                      SessionStore.FailureState(failed, command, "v18.20.4"));
         Assert.Equal(new CliState.Unavailable("SyntaxError: Unexpected token"),
                      SessionStore.FailureState(failed, command, "v22.17.0"));

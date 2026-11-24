@@ -18,9 +18,10 @@ public abstract record CliState
 
     /// <summary>
     /// The CLI runs on Node.js, which is not installed, or (with
-    /// <paramref name="Found"/>, the version found) too old.
+    /// <paramref name="Found"/>, the version found) too old. Carries both the
+    /// invoked/wrapper <paramref name="Path"/> and the resolved <paramref name="Script"/>.
     /// </summary>
-    public sealed record NodeMissing(string Path, string? Found = null) : CliState;
+    public sealed record NodeMissing(string Path, string Script, string? Found = null) : CliState;
 
     /// <summary>Too old to have <c>status</c>.</summary>
     public sealed record Unsupported : CliState;
@@ -353,7 +354,7 @@ public sealed class SessionStore : ObservableObject
     {
         if ((result.Stdout + result.Stderr).Contains("Usage:")) return new CliState.Unsupported();
         if (command.Script is not null && NodeMajor(nodeVersion) is { } major && major < MinimumNodeMajor)
-            return new CliState.NodeMissing(command.Path, nodeVersion);
+            return new CliState.NodeMissing(command.Path, command.Script, nodeVersion);
         var detail = result.LastErrorLines();
         return new CliState.Unavailable(detail.Length == 0 ? $"varlatch exited with status {result.ExitCode}" : detail);
     }
@@ -415,7 +416,7 @@ public sealed class SessionStore : ObservableObject
                 break;
             case CliResolution.NodeMissing node:
                 CliCommand = null;
-                CliState = new CliState.NodeMissing(node.Path);
+                CliState = new CliState.NodeMissing(node.Path, node.Script);
                 break;
         }
         return null;

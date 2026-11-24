@@ -124,10 +124,29 @@ public class CliUpdateTests
     public void TheInstallScriptsCommand()
     {
         Assert.Equal(["ps", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "s.ps1", "-Update", @"C:\v\varlatch.cjs",
-                      "-Version", "0.50.0", "-Node", @"C:\node\node.exe", "-Settings", @"C:\s\settings.json"],
-                     CliUpdate.Installer("ps", "s.ps1", @"C:\v\varlatch.cjs", ReleaseVersion.Parse("0.50.0"), @"C:\node\node.exe", @"C:\s\settings.json"));
+                      "-Version", "0.50.0", "-Node", @"C:\node\node.exe", "-ResultFile", @"C:\s\mig.json"],
+                     CliUpdate.Installer("ps", "s.ps1", @"C:\v\varlatch.cjs", ReleaseVersion.Parse("0.50.0"), @"C:\node\node.exe", @"C:\s\mig.json"));
         Assert.Equal(["ps", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "s.ps1", "-Update", @"C:\v\varlatch.cjs"],
                      CliUpdate.Installer("ps", "s.ps1", @"C:\v\varlatch.cjs", null, null));
+    }
+
+    [Fact]
+    public void TryMergeMigrationResultMergesAtomicallyAndRemovesResultFile()
+    {
+        var dir = TestDirectory.Path("mig-merge");
+        Directory.CreateDirectory(dir);
+        var settingsPath = Path.Combine(dir, "settings.json");
+        var exePath = Path.Combine(dir, "varlatch.exe");
+        var resultPath = Path.Combine(dir, "migration-1.json");
+        File.WriteAllText(exePath, "MZ");
+        var settings = new SettingsFile(settingsPath);
+        settings.Save(new Preferences(cliPath: Path.Combine(dir, "varlatch.cjs"), checkUpdates: true));
+        File.WriteAllText(resultPath, System.Text.Json.JsonSerializer.Serialize(new { migratedFrom = Path.Combine(dir, "varlatch.cjs"), migratedTo = exePath }));
+
+        Assert.True(CliUpdate.TryMergeMigrationResult(resultPath, settings));
+        Assert.False(File.Exists(resultPath));
+        Assert.Equal(exePath, settings.Preferences.MigratedCli);
+        Assert.True(settings.Preferences.CheckUpdates);
     }
 
     [Fact]
@@ -149,19 +168,31 @@ public class CliUpdateTests
         var checkoutCli = Path.Combine(checkoutDir, "varlatch.cjs");
         File.WriteAllText(checkoutCli, "/*! Varlatch CLI. */\n");
 
+        var v10 = ReleaseVersion.Parse("0.10.9");
         var v23 = ReleaseVersion.Parse("0.23.0");
+        var vDev = ReleaseVersion.Parse("0.23.0-dev");
         var v50 = ReleaseVersion.Parse("0.50.0");
 
-        // No native target resolved (< 0.50.0 or null): ineligible.
-        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, null));
-        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, v23));
-        // Eligible with a native target:
-        Assert.Equal(v50, CliUpdate.NativeTargetWithoutNode(cjs, v50));
-        Assert.Equal(v50, CliUpdate.NativeTargetWithoutNode(shim, v50));
+        // Native asset must be confirmed in SHA256SUMS and >= 0.50.0.
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, cjs, v23, null, true));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, cjs, v23, v23, true));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, cjs, v23, v50, false));
+        // Source version eligibility (too old or -dev refused).
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, cjs, v10, v50, true));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, cjs, vDev, v50, true));
+        // Eligible with confirmed native asset:
+        Assert.Equal(v50, CliUpdate.NativeTargetWithoutNode(cjs, cjs, v23, v50, true));
+        Assert.Equal(v50, CliUpdate.NativeTargetWithoutNode(shim, cjs, null, v50, true));
         // Wrong filename, custom script, or checkout: ineligible.
-        Assert.Null(CliUpdate.NativeTargetWithoutNode(other, v50));
-        Assert.Null(CliUpdate.NativeTargetWithoutNode(custom, v50));
-        Assert.Null(CliUpdate.NativeTargetWithoutNode(checkoutCli, v50));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(other, other, v23, v50, true));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(custom, custom, v23, v50, true));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(checkoutCli, checkoutCli, v23, v50, true));
+        // HasAssetInSums requires exactly one valid 64-hex line for this arch's asset.
+        var asset = CliUpdate.NativeAssetName(v50!.Value, System.Runtime.InteropServices.Architecture.X64);
+        Assert.Equal("varlatch-0.50.0-windows-amd64.exe", asset);
+        Assert.True(CliUpdate.HasAssetInSums($"{new string('a', 64)}  {asset}\n", asset));
+        Assert.False(CliUpdate.HasAssetInSums($"{new string('a', 64)}  other.exe\n", asset));
+        Assert.False(CliUpdate.HasAssetInSums($"{new string('a', 64)}  {asset}\n{new string('b', 64)}  {asset}\n", asset));
     }
 
     [Fact]

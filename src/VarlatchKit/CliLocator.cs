@@ -40,7 +40,7 @@ public abstract record CliResolution
     }
 
     /// <summary>The CLI is a Node.js script, and there is no Node.js to run it.</summary>
-    public sealed record NodeMissing(string Path) : CliResolution;
+    public sealed record NodeMissing(string Path, string Script) : CliResolution;
 }
 
 /// <summary>
@@ -140,9 +140,10 @@ public sealed class CliLocator(SystemContext system, string? overridePath = null
         if (!string.IsNullOrEmpty(raw))
         {
             var path = Expand(raw);
-            // Only adopt a sibling varlatch.exe after a recorded successful
-            // migration, never from mere presence on disk.
-            if (!system.FileExists(path) && Replacement(path) is { } native) path = native;
+            // After a recorded explicit migration, move the app's own override
+            // to the migrated varlatch.exe (even if an unmanaged wrapper stayed).
+            // Never adopt a sibling varlatch.exe from mere presence alone.
+            if (Replacement(path) is { } native) path = native;
             if (!system.FileExists(path)) return new CliResolution.OverrideUnusable(path);
             return Command(path) ?? (CliResolution)new CliResolution.OverrideUnusable(path);
         }
@@ -221,7 +222,7 @@ public sealed class CliLocator(SystemContext system, string? overridePath = null
     {
         var node = FindNode();
         return node is null
-            ? new CliResolution.NodeMissing(path)
+            ? new CliResolution.NodeMissing(path, script)
             : new CliResolution.Found(new CliCommand(path, node, [script], script));
     }
 

@@ -1,12 +1,15 @@
 using System.Text;
+using System.Text.Json;
 
 namespace VarlatchKit;
 
 /// <summary>
 /// A PowerShell script that runs one command for the person watching: it
 /// says what it does, shows the command, runs it, says how it went, and
-/// waits for Enter so the window does not vanish. The app writes it to a
-/// temporary file and opens it in Windows Terminal; the file removes itself.
+/// waits for Enter so the window does not vanish. For unelevated runs the app
+/// writes it to a temporary file and opens it in Windows Terminal; for
+/// elevated runs it passes the fixed bootstrap by <c>-EncodedCommand</c> with
+/// the values as Base64 JSON data so no temporary <c>.ps1</c> is written.
 /// </summary>
 public static class TerminalScript
 {
@@ -35,6 +38,47 @@ public static class TerminalScript
         script.AppendLine("[void](Read-Host 'Press Enter to close')");
         return script.ToString();
     }
+
+    /// <summary>
+    /// A fixed bootstrap script with <paramref name="title"/> and
+    /// <paramref name="command"/> carried as Base64 UTF-8 JSON data, never
+    /// interpolated into PowerShell syntax. Used for <c>-EncodedCommand</c>.
+    /// </summary>
+    public static string BuildBootstrap(string title, IReadOnlyList<string> command)
+    {
+        var payload = Convert.ToBase64String(Encoding.UTF8.GetBytes(
+            JsonSerializer.Serialize(new
+            {
+                title,
+                command,
+                shown = string.Join(" ", command.Select(Display)),
+            })));
+        var script = new StringBuilder();
+        script.AppendLine($"$d = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{payload}')) | ConvertFrom-Json");
+        script.AppendLine("$Host.UI.RawUI.WindowTitle = $d.title");
+        script.AppendLine("Write-Host $d.title");
+        script.AppendLine("Write-Host ''");
+        script.AppendLine("Write-Host ('> ' + $d.shown)");
+        script.AppendLine("$global:LASTEXITCODE = 0");
+        script.AppendLine("try {");
+        script.AppendLine("  $cmd = @($d.command)");
+        script.AppendLine("  $exe = $cmd[0]");
+        script.AppendLine("  $rest = if ($cmd.Count -gt 1) { @($cmd[1..($cmd.Count - 1)]) } else { @() }");
+        script.AppendLine("  & $exe @rest");
+        script.AppendLine("  $status = if ($?) { $LASTEXITCODE } else { if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 } }");
+        script.AppendLine("} catch {");
+        script.AppendLine("  Write-Host $_ -ForegroundColor Red");
+        script.AppendLine("  $status = 1");
+        script.AppendLine("}");
+        script.AppendLine("Write-Host ''");
+        script.AppendLine("if ($status -eq 0) { Write-Host 'Done. You can close this window.' } else { Write-Host \"That did not work (exit $status).\" }");
+        script.AppendLine("[void](Read-Host 'Press Enter to close')");
+        return script.ToString();
+    }
+
+    /// <summary>UTF-16LE Base64 for PowerShell's <c>-EncodedCommand</c> parameter.</summary>
+    public static string EncodedCommand(string title, IReadOnlyList<string> command) =>
+        Convert.ToBase64String(Encoding.Unicode.GetBytes(BuildBootstrap(title, command)));
 
     /// <summary>
     /// Quotes <paramref name="text"/> for PowerShell: ASCII single quotes are

@@ -314,6 +314,7 @@ public class VersionTests
         Assert.True(new ReleaseVersion(0, 13, 9) < ReleaseVersion.DeviceSignIn);
         Assert.True(new ReleaseVersion(0, 16, 0, "rc.1") < new ReleaseVersion(0, 16, 0));
         Assert.True(new ReleaseVersion(0, 50, 0, "rc.9") < new ReleaseVersion(0, 50, 0, "rc.10"));
+        Assert.True(new ReleaseVersion(0, 50, 0, "rc.99999999999999999999999") < new ReleaseVersion(0, 50, 0, "rc.100000000000000000000000"));
         Assert.True(new ReleaseVersion(1, 0, 0) > new ReleaseVersion(0, 99, 99));
         Assert.Equal(new ReleaseVersion(0, 15, 1), ReleaseVersion.Parse("0.15.1"));
         Assert.NotEqual(new ReleaseVersion(0, 16, 0), new ReleaseVersion(0, 16, 0, "rc.1"));

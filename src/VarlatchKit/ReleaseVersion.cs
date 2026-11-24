@@ -85,15 +85,25 @@ public readonly record struct ReleaseVersion : IComparable<ReleaseVersion>
         var shared = Math.Min(a.Length, b.Length);
         for (var i = 0; i < shared; i++)
         {
-            var aNum = ulong.TryParse(a[i], NumberStyles.None, CultureInfo.InvariantCulture, out var av);
-            var bNum = ulong.TryParse(b[i], NumberStyles.None, CultureInfo.InvariantCulture, out var bv);
+            var aNum = AllDigits(a[i]);
+            var bNum = AllDigits(b[i]);
             int cmp;
-            if (aNum && bNum) cmp = av.CompareTo(bv);
+            if (aNum && bNum) cmp = CompareDigits(a[i], b[i]);
             else if (aNum != bNum) cmp = aNum ? -1 : 1;
             else cmp = Math.Sign(string.CompareOrdinal(a[i], b[i]));
             if (cmp != 0) return cmp;
         }
         return a.Length.CompareTo(b.Length);
+    }
+
+    private static bool AllDigits(string s) => s.Length > 0 && s.All(c => c is >= '0' and <= '9');
+
+    private static int CompareDigits(string a, string b)
+    {
+        var ta = a.TrimStart('0');
+        var tb = b.TrimStart('0');
+        var len = ta.Length.CompareTo(tb.Length);
+        return len != 0 ? len : Math.Sign(string.CompareOrdinal(ta, tb));
     }
 
     public bool Equals(ReleaseVersion other) =>

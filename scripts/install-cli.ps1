@@ -45,8 +45,9 @@ param(
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Programs\Varlatch'),
     # Varlatch.exe, told about the new CLI and asked to sign in.
     [string]$App,
-    # App settings.json, where a successful migration to varlatch.exe is recorded.
-    [string]$Settings,
+    # Per-run result file written on a successful migration; the unelevated app
+    # merges it into settings.json atomically. The script never writes settings.json.
+    [string]$ResultFile,
     # Install without asking.
     [switch]$Yes,
     # Leave the user PATH alone.
@@ -304,21 +305,15 @@ function Remove-TypeScriptCli {
     elseif ($removed) { Write-Host 'It replaces varlatch.cjs. Your sign-ins and settings carry over.' }
 }
 
-# Records a successful migration to varlatch.exe in the app's settings.json so
-# an explicit CLI path to the replaced varlatch.cjs/.cmd adopts it.
-function Save-MigratedCli([string]$SettingsPath, [string]$ExePath) {
-    if (-not $SettingsPath) { return }
+# Writes a small per-run migration result file for the unelevated app to merge
+# into settings.json atomically (this script never writes settings.json).
+function Write-MigrationResult([string]$Path, [string]$FromPath, [string]$ExePath) {
+    if (-not $Path) { return }
     try {
-        $dir = Split-Path -Parent $SettingsPath
+        $dir = Split-Path -Parent $Path
         if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-        $obj = $null
-        if (Test-Path -LiteralPath $SettingsPath) {
-            try { $obj = Get-Content -LiteralPath $SettingsPath -Raw | ConvertFrom-Json } catch { $obj = $null }
-        }
-        if (-not $obj) { $obj = New-Object psobject }
-        $obj | Add-Member -NotePropertyName 'migratedCli' -NotePropertyValue $ExePath -Force
-        $json = ($obj | ConvertTo-Json -Depth 10) + "`n"
-        [IO.File]::WriteAllText($SettingsPath, $json, (New-Object System.Text.UTF8Encoding $false))
+        $json = ([pscustomobject]@{ migratedFrom = $FromPath; migratedTo = $ExePath } | ConvertTo-Json -Compress) + "`n"
+        [IO.File]::WriteAllText($Path, $json, (New-Object System.Text.UTF8Encoding $false))
     } catch { }
 }
 
@@ -326,6 +321,7 @@ Write-Host $(if ($Update) { 'Update the Varlatch CLI' } else { 'Install the Varl
 Write-Host ''
 Update-SessionPath
 if ($Node) { $env:Path = "$(Split-Path -Parent $Node);$env:Path" }
+$originalUpdate = $Update
 if ($Update) {
     $InstallDir = Split-Path -Parent $Update
     # The shim that runs varlatch.cjs stands for it.
@@ -500,7 +496,7 @@ try {
         Write-Host "Installed: $reported"
         if ($native) {
             Remove-TypeScriptCli
-            if ($Update) { Save-MigratedCli $Settings $target }
+            if ($Update) { Write-MigrationResult $ResultFile $originalUpdate $target }
         }
     } finally {
         Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue

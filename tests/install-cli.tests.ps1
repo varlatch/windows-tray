@@ -224,11 +224,14 @@ try {
     Invoke-Installer @{ Update = $cjs; Version = '10.0.0'; Yes = $true }
     Check 'another wrapper referencing varlatch.cjs keeps varlatch.cjs' ($code -eq 0 -and (Names) -eq 'helper.cmd varlatch.cjs varlatch.cmd varlatch.exe')
     Reset-Test; Add-TypeScriptCli; New-Release '10.0.0' -Native
-    $settingsFile = Join-Path $root 'settings.json'
-    [IO.File]::WriteAllText($settingsFile, '{"cliPath":"C:\\old\\varlatch.cjs"}')
-    Invoke-Installer @{ Update = $cjs; Version = '10.0.0'; Settings = $settingsFile; Yes = $true }
-    $savedSettings = Get-Content -LiteralPath $settingsFile -Raw | ConvertFrom-Json
-    Check 'update with -Settings records migratedCli on success' ($code -eq 0 -and $savedSettings.migratedCli -eq $exe -and $savedSettings.cliPath -eq 'C:\old\varlatch.cjs')
+    $resultFile = Join-Path $root 'migration-result.json'
+    Invoke-Installer @{ Update = $cjs; Version = '10.0.0'; ResultFile = $resultFile; Yes = $true }
+    $savedResult = Get-Content -LiteralPath $resultFile -Raw | ConvertFrom-Json
+    Check 'update with -ResultFile writes migration result on success without touching settings.json' ($code -eq 0 -and $savedResult.migratedTo -eq $exe -and $savedResult.migratedFrom -eq $cjs)
+    Reset-Test; Add-TypeScriptCli; New-Release '10.0.0' -Native -BreaksInPlace
+    $failedResult = Join-Path $root 'migration-failed.json'
+    Invoke-Installer @{ Update = $cjs; Version = '10.0.0'; ResultFile = $failedResult; Yes = $true }
+    Check 'failed update writes no migration result file' ($code -eq 1 -and -not (Test-Path $failedResult))
     Reset-Test; New-Release '10.0.0' -Native
     Invoke-Installer @{ InstallDir = $cli; Version = '10.0.0;calc'; Yes = $true }
     Check 'a hostile -Version is rejected' ($code -eq 1 -and $output -match 'invalid release version' -and -not (Names))

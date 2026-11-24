@@ -55,10 +55,16 @@ public class CliLocatorTests
         // Only for the file varlatch.exe takes the place of.
         Assert.Equal(new CliResolution.OverrideUnusable(@"C:\tools\other.cjs"),
                      new CliLocator(System(p => p == @"C:\tools\varlatch.exe"), @"C:\tools\other.cjs", migratedCli: @"C:\tools\varlatch.exe").Resolve());
-        // One that is still there is used as it is set.
-        var kept = new CliLocator(System(p => p is @"C:\tools\varlatch.exe" or @"C:\tools\varlatch.cjs" or Node),
-                                  @"C:\tools\varlatch.cjs", migratedCli: @"C:\tools\varlatch.exe");
-        Assert.Equal(Node, Assert.IsType<CliResolution.Found>(kept.Resolve()).Command.Executable);
+        // After a recorded explicit migration, even when an unmanaged wrapper
+        // and varlatch.cjs stayed on disk, the app's own override moves to the
+        // migrated varlatch.exe (while the wrapper stays untouched).
+        var keptWrapper = new CliLocator(System(p => p is @"C:\tools\varlatch.exe" or @"C:\tools\varlatch.cjs" or @"C:\tools\varlatch.cmd" or Node),
+                                         @"C:\tools\varlatch.cjs", migratedCli: @"C:\tools\varlatch.exe");
+        Assert.Equal(@"C:\tools\varlatch.exe", Assert.IsType<CliResolution.Found>(keptWrapper.Resolve()).Command.Executable);
+        // Without a recorded migration, varlatch.cjs still runs via Node even if varlatch.exe exists beside it.
+        var unmigrated = new CliLocator(System(p => p is @"C:\tools\varlatch.exe" or @"C:\tools\varlatch.cjs" or Node),
+                                        @"C:\tools\varlatch.cjs");
+        Assert.Equal(Node, Assert.IsType<CliResolution.Found>(unmigrated.Resolve()).Command.Executable);
     }
 
     [Fact]
@@ -128,7 +134,7 @@ public class CliLocatorTests
     public void NoNode()
     {
         var locator = new CliLocator(System(p => p == Installed));
-        Assert.Equal(new CliResolution.NodeMissing(Installed), locator.Resolve());
+        Assert.Equal(new CliResolution.NodeMissing(Installed, Installed), locator.Resolve());
     }
 
     [Fact]
@@ -306,6 +312,24 @@ public class TerminalScriptTests
             Assert.DoesNotContain(q, quoted);
             Assert.Contains($"[char]0x{(int)q:X4}", quoted);
         }
+    }
+
+    [Fact]
+    public async Task EncodedCommandRunsElevatedBootstrapWithDataPayload()
+    {
+        var hostile = "a\u2019; exit 99 #";
+        var bootstrap = TerminalScript.BuildBootstrap("Test", ["cmd.exe", "/c", "echo", hostile]);
+        Assert.Contains("ConvertFrom-Json", bootstrap);
+        Assert.DoesNotContain(hostile, bootstrap);
+        var noPause = string.Join('\n', bootstrap.Split('\n').Where(l => !l.Contains("Read-Host")));
+        var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(noPause));
+        var result = await CliProcess.RunAsync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+                                               new Dictionary<string, string>(Environment.GetEnvironmentVariables()
+                                                   .Cast<System.Collections.DictionaryEntry>()
+                                                   .ToDictionary(e => (string)e.Key, e => (string?)e.Value ?? "")),
+                                               TimeSpan.FromSeconds(60));
+        Assert.Contains("Done. You can close this window.", result.Stdout);
+        Assert.DoesNotContain("exit 99", result.Stderr);
     }
 
     [Fact]
