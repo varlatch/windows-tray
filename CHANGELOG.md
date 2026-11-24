@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+Ready for Varlatch 0.50.0, whose CLI is `varlatch.exe` instead of a file
+that Node.js runs. Works with both, and with servers of both.
+
+- **Install in Terminal** takes `varlatch.exe` for a release that has one,
+  and `varlatch.cjs` for one that has not, by what the release's
+  `SHA256SUMS` lists. Node.js is asked for only with `varlatch.cjs`. A
+  server on a prerelease gets that prerelease.
+- **Update in Terminal** from `varlatch.cjs` to a release with
+  `varlatch.exe` replaces `varlatch.cjs` and its `varlatch.cmd` shim in
+  place: its own `self-update` cannot. The old CLI stays when the new one
+  does not run, and your sign-ins carry over.
+- When `varlatch.cjs` has no Node.js to run on, the panel also offers
+  **Update the CLI** so you can move straight to `varlatch.exe`.
+- Finds and prefers `varlatch.exe` over `varlatch.cjs`, recognizes it as a
+  release install for `varlatch self-update`, and follows a `CLI path`
+  setting pointing at a replaced `varlatch.cjs` or `varlatch.cmd` to the
+  `varlatch.exe` beside it.
+- A copy installed with winget is recognized and left to
+  `winget upgrade varlatch`.
+
 ## 0.1.2 (2026-11-20)
 
 - **Fix: a denied or expired sign-in from another device** showed as a
