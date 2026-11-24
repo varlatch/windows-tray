@@ -42,7 +42,7 @@ public abstract record CliState
 /// </remarks>
 public sealed class SessionStore : ObservableObject
 {
-    /// <summary>The oldest Node.js the release CLI runs on.</summary>
+    /// <summary>The oldest Node.js a varlatch.cjs runs on.</summary>
     public const int MinimumNodeMajor = 22;
 
     public static readonly TimeSpan StatusTimeout = TimeSpan.FromSeconds(15);

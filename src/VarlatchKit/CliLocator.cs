@@ -6,10 +6,11 @@ namespace VarlatchKit;
 /// <summary>
 /// How to run the CLI: <see cref="Path"/> is the CLI as installed (what the
 /// app shows), <see cref="Executable"/> and <see cref="Prefix"/> are what it
-/// starts. The release CLI is a single <c>.cjs</c> file that Node.js runs,
-/// so for it, and for a <c>varlatch.cmd</c> shim that runs one, the app
-/// starts <c>node.exe</c> on the script itself: a cancel then ends the CLI
-/// rather than a <c>cmd.exe</c> in front of it.
+/// starts. The release CLI is <c>varlatch.exe</c> from 0.50, and before that a
+/// single <c>.cjs</c> file that Node.js runs. For that one, and for a
+/// <c>varlatch.cmd</c> shim that runs one, the app starts <c>node.exe</c> on
+/// the script itself: a cancel then ends the CLI rather than a
+/// <c>cmd.exe</c> in front of it.
 /// </summary>
 public sealed record CliCommand(string Path, string Executable, IReadOnlyList<string> Prefix, string? Script = null)
 {
@@ -115,16 +116,20 @@ public static class PathDirectories
 /// <summary>
 /// Finds the <c>varlatch</c> CLI and the environment to run it with: the
 /// path set in the settings, else the release CLI where the app installs it
-/// (<c>%LOCALAPPDATA%\Programs\Varlatch\varlatch.cjs</c>), else
-/// <c>varlatch</c> on the <c>PATH</c>.
+/// (<c>%LOCALAPPDATA%\Programs\Varlatch</c>: <c>varlatch.exe</c>, or the
+/// <c>varlatch.cjs</c> it replaces), else <c>varlatch</c> on the <c>PATH</c>.
 /// </summary>
 public sealed class CliLocator(SystemContext system, string? overridePath = null)
 {
     private static readonly string[] PathExtensions = [".exe", ".cmd", ".bat"];
 
-    /// <summary>Where the app installs the release CLI, as the Varlatch docs do on Windows.</summary>
+    /// <summary>Where the app installs the release CLI, as Varlatch's install.ps1 does.</summary>
     public static string InstallPath(string localAppData) =>
-        System.IO.Path.Combine(localAppData, "Programs", "Varlatch", "varlatch.cjs");
+        System.IO.Path.Combine(localAppData, "Programs", "Varlatch", "varlatch.exe");
+
+    /// <summary>The same for a release before 0.50, which Node.js runs.</summary>
+    public static string ScriptInstallPath(string localAppData) =>
+        System.IO.Path.ChangeExtension(InstallPath(localAppData), ".cjs");
 
     /// <summary>How the "not found" message names the places looked in.</summary>
     public const string OnPathDescription = "varlatch on your PATH";
@@ -135,11 +140,15 @@ public sealed class CliLocator(SystemContext system, string? overridePath = null
         if (!string.IsNullOrEmpty(raw))
         {
             var path = Expand(raw);
+            // varlatch.exe takes the place of the varlatch.cjs and its shim.
+            if (!system.FileExists(path) && Replacement(path) is { } native) path = native;
             if (!system.FileExists(path)) return new CliResolution.OverrideUnusable(path);
             return Command(path) ?? (CliResolution)new CliResolution.OverrideUnusable(path);
         }
         var installed = InstallPath(system.LocalAppData);
         if (system.FileExists(installed)) return Command(installed)!;
+        var script = ScriptInstallPath(system.LocalAppData);
+        if (system.FileExists(script)) return Command(script)!;
         foreach (var dir in system.SearchPath())
         {
             foreach (var extension in PathExtensions)
@@ -149,6 +158,14 @@ public sealed class CliLocator(SystemContext system, string? overridePath = null
             }
         }
         return new CliResolution.NotFound([installed, OnPathDescription]);
+    }
+
+    /// <summary>The varlatch.exe beside a varlatch.cjs or varlatch.cmd that it replaced.</summary>
+    private string? Replacement(string path)
+    {
+        if (System.IO.Path.GetFileName(path).ToLowerInvariant() is not ("varlatch.cjs" or "varlatch.cmd")) return null;
+        var native = System.IO.Path.ChangeExtension(path, ".exe");
+        return system.FileExists(native) ? native : null;
     }
 
     /// <summary>How to run the CLI at <paramref name="path"/>; null when Windows cannot run it.</summary>

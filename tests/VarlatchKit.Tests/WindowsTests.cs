@@ -4,6 +4,7 @@ public class CliLocatorTests
 {
     private const string Local = @"C:\Users\me\AppData\Local";
     private const string Installed = @"C:\Users\me\AppData\Local\Programs\Varlatch\varlatch.cjs";
+    private const string Native = @"C:\Users\me\AppData\Local\Programs\Varlatch\varlatch.exe";
     private const string Node = @"C:\Program Files\nodejs\node.exe";
 
     private static SystemContext System(Func<string, bool> exists, string[]? path = null,
@@ -19,6 +20,34 @@ public class CliLocatorTests
                                             [@"C:\tools", @"C:\Program Files\nodejs"]));
         var found = Assert.IsType<CliResolution.Found>(locator.Resolve());
         Assert.Equal(new CliCommand(Installed, Node, [Installed], Installed), found.Command);
+    }
+
+    [Fact]
+    public void PrefersTheNativeCli()
+    {
+        // Also when the varlatch.cjs it replaced could not be removed, and
+        // without Node.js.
+        var locator = new CliLocator(System(p => p is Native or Installed));
+        var found = Assert.IsType<CliResolution.Found>(locator.Resolve());
+        Assert.Equal(new CliCommand(Native, Native, []), found.Command);
+        Assert.Null(found.Command.Script);
+    }
+
+    [Fact]
+    public void ASetPathToTheReplacedCli()
+    {
+        foreach (var path in new[] { @"C:\tools\varlatch.cjs", @"C:\tools\varlatch.cmd" })
+        {
+            var locator = new CliLocator(System(p => p == @"C:\tools\varlatch.exe"), path);
+            var found = Assert.IsType<CliResolution.Found>(locator.Resolve());
+            Assert.Equal(@"C:\tools\varlatch.exe", found.Command.Executable);
+        }
+        // Only for the file varlatch.exe takes the place of.
+        Assert.Equal(new CliResolution.OverrideUnusable(@"C:\tools\other.cjs"),
+                     new CliLocator(System(p => p == @"C:\tools\varlatch.exe"), @"C:\tools\other.cjs").Resolve());
+        // One that is still there is used as it is set.
+        var kept = new CliLocator(System(p => p is @"C:\tools\varlatch.exe" or @"C:\tools\varlatch.cjs" or Node), @"C:\tools\varlatch.cjs");
+        Assert.Equal(Node, Assert.IsType<CliResolution.Found>(kept.Resolve()).Command.Executable);
     }
 
     [Fact]
@@ -59,7 +88,7 @@ public class CliLocatorTests
     public void ReportsWhereItLooked()
     {
         var locator = new CliLocator(System(_ => false));
-        Assert.Equal(new CliResolution.NotFound([Installed, CliLocator.OnPathDescription]), locator.Resolve());
+        Assert.Equal(new CliResolution.NotFound([Native, CliLocator.OnPathDescription]), locator.Resolve());
     }
 
     [Fact]

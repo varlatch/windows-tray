@@ -80,7 +80,7 @@ internal sealed class AppController
         // The CLI prints the sign-in page's address; the app opens it.
         SignIn.LinkFound += (_, link) => Open(link);
 
-        Releases.NewRelease += version => Notifier.PostRelease(version, Store.CliVersion, UpdateFor(version));
+        Releases.NewRelease += version => Notifier.PostRelease(version, Store.CliVersion, UpdateWay);
         Releases.Changed += Announce;
         ReleaseVersion? lastVersion = null;
         Store.PropertyChanged += (_, e) =>
@@ -481,34 +481,40 @@ internal sealed class AppController
     /// <summary>A newer CLI release, with release checks on.</summary>
     public ReleaseVersion? AvailableRelease => Store.Preferences.CheckUpdates ? Releases.Available(Store.CliVersion) : null;
 
-    public enum Update
-    {
-        /// <summary><c>varlatch self-update &lt;version&gt;</c> (CLI 0.11.0 and newer).</summary>
-        SelfUpdate,
-        /// <summary>Release notes only: updated the way it was installed.</summary>
-        Manual,
-    }
+    public CliUpdateWay UpdateWay => CliUpdate.Way(CliInstall, Store.CliCommand, Store.CliVersion);
 
-    public Update UpdateFor(ReleaseVersion version) =>
-        CliInstall == CliInstallKind.Release && Store.CliVersion is { } v && v >= ReleaseVersion.SelfUpdate
-            ? Update.SelfUpdate
-            : Update.Manual;
+    /// <summary>Whether the app can update the CLI in Terminal.</summary>
+    public bool UpdatesInTerminal => UpdateWay is CliUpdateWay.SelfUpdate or CliUpdateWay.Installer;
 
     /// <summary>
-    /// Updates the CLI in Terminal with its own self-update, which shows what
-    /// it checked and asks before replacing anything. A CLI in a folder this
-    /// user cannot write to updates from an administrator PowerShell.
+    /// Updates the CLI in Terminal with its own self-update, or the install
+    /// script, which show what they checked and ask before replacing
+    /// anything. A CLI in a folder this user cannot write to updates from an
+    /// administrator PowerShell.
     /// </summary>
     public void UpdateCli(ReleaseVersion version)
     {
-        if (UpdateFor(version) != Update.SelfUpdate || Store.CliCommand is not { } command)
+        if (!UpdatesInTerminal || Store.CliCommand is not { } command)
         {
             Open(ReleaseChecker.ReleaseUrl(version));
             return;
         }
-        string[] run = [command.Executable, .. command.Prefix, "self-update", version.ToString()];
-        var elevated = !VarlatchKit.CliInstall.DirectoryWritable(command.CodePath);
-        Terminal.Run("Updating the Varlatch CLI", run, elevated);
+        IReadOnlyList<string> run = UpdateWay == CliUpdateWay.Installer
+            ? CliUpdate.Installer(Terminal.PowerShell, InstallScript, command.CodePath, version, command.Executable)
+            : [command.Executable, .. command.Prefix, "self-update", version.ToString()];
+        RunUpdate(run, command.CodePath);
+    }
+
+    /// <summary>
+    /// Updates a varlatch.cjs that has no Node.js to run it to the latest
+    /// release, in Terminal: from 0.50, the CLI does not need Node.js.
+    /// </summary>
+    public void UpdateCliWithoutNode(string path) =>
+        RunUpdate(CliUpdate.Installer(Terminal.PowerShell, InstallScript, path, version: null, node: null), path);
+
+    private void RunUpdate(IReadOnlyList<string> command, string path)
+    {
+        Terminal.Run("Updating the Varlatch CLI", command, elevated: !VarlatchKit.CliInstall.DirectoryWritable(path));
         After(TimeSpan.FromSeconds(20), () => _ = RefreshAll());
     }
 }

@@ -76,7 +76,7 @@ public class SessionStoreTests
         var store = new SessionStore(new Preferences(), fake.System(fileExists: _ => false));
         await store.RefreshAsync();
         var missing = Assert.IsType<CliState.Missing>(store.CliState);
-        Assert.Equal([Path.Combine(fake.Dir, "Local", "Programs", "Varlatch", "varlatch.cjs"), CliLocator.OnPathDescription],
+        Assert.Equal([Path.Combine(fake.Dir, "Local", "Programs", "Varlatch", "varlatch.exe"), CliLocator.OnPathDescription],
                      missing.Searched);
         Assert.Equal(OverallState.CliMissing, store.Overall());
     }

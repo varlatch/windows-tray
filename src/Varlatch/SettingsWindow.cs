@@ -88,7 +88,7 @@ internal sealed class SettingsWindow : Window
         var pathStack = new StackPanel { Spacing = 8 };
         pathStack.Children.Add(Text("CLI path", "VarlatchBodyText"));
         pathStack.Children.Add(Caption(
-            @"Leave it empty to use %LOCALAPPDATA%\Programs\Varlatch\varlatch.cjs, or varlatch on your PATH. " +
+            @"Leave it empty to use the CLI in %LOCALAPPDATA%\Programs\Varlatch, or varlatch on your PATH. " +
             "A .cjs file runs with Node.js; a .cmd, .exe, or .ps1 runs as it is."));
         pathStack.Children.Add(pathRow);
         pathStack.Children.Add(cliInUse);
@@ -221,6 +221,7 @@ internal sealed class SettingsWindow : Window
             var kind = VarlatchKit.CliInstall.Kind(command) switch
             {
                 CliInstallKind.Release => "release build",
+                CliInstallKind.Winget => "installed with winget",
                 CliInstallKind.Checkout => "source checkout",
                 _ => "custom",
             };
@@ -234,7 +235,7 @@ internal sealed class SettingsWindow : Window
             cliInUse.Text = store.CliState switch
             {
                 CliState.PathUnusable => "In use: none. The path above cannot run.",
-                CliState.NodeMissing => "In use: none. Node.js 22 or newer is needed to run it.",
+                CliState.NodeMissing => "In use: none. This CLI needs Node.js 22 or newer.",
                 _ => "In use: none. The CLI was not found.",
             };
             cliInUse.Style = Style("VarlatchErrorText");

@@ -55,6 +55,19 @@ public class CliInstallTests
         Assert.Equal(CliInstallKind.Release, CliInstall.Kind(new CliCommand(shim, @"C:\node\node.exe", [script], script)));
     }
 
+    private static CliCommand Program(string path) => new(path, path, []);
+
+    [Fact]
+    public void NativeCli() =>
+        Assert.Equal(CliInstallKind.Release, CliInstall.Kind(Program(File(@"Programs\Varlatch\varlatch.exe", "MZ\u0090"))));
+
+    [Fact]
+    public void WingetsCopy()
+    {
+        Assert.Equal(CliInstallKind.Winget, CliInstall.Kind(Program(File(@"Microsoft\WinGet\Links\varlatch.exe", "MZ"))));
+        Assert.Equal(CliInstallKind.Winget, CliInstall.Kind(Program(File(@"Microsoft\WinGet\Packages\Varlatch.CLI_x\varlatch.exe", "MZ"))));
+    }
+
     [Fact]
     public void SourceCheckout()
     {
@@ -69,6 +82,60 @@ public class CliInstallTests
 
     [Fact]
     public void Writable() => Assert.True(CliInstall.DirectoryWritable(File("a.txt", "")));
+}
+
+public class CliUpdateTests
+{
+    private static readonly CliCommand Script = new(@"C:\v\varlatch.cjs", @"C:\node\node.exe", [@"C:\v\varlatch.cjs"], @"C:\v\varlatch.cjs");
+    private static readonly CliCommand Native = new(@"C:\v\varlatch.exe", @"C:\v\varlatch.exe", []);
+
+    private static CliUpdateWay Way(CliInstallKind kind, CliCommand command, string version) =>
+        CliUpdate.Way(kind, command, ReleaseVersion.Parse(version));
+
+    [Fact]
+    public void TheNativeCliUpdatesItself()
+    {
+        Assert.Equal(CliUpdateWay.SelfUpdate, Way(CliInstallKind.Release, Native, "0.50.0"));
+        Assert.Equal(CliUpdateWay.SelfUpdate, Way(CliInstallKind.Release, Native, "0.50.0-rc.3"));
+    }
+
+    [Fact]
+    public void TheSingleFileGoesThroughTheInstallScript() =>
+        Assert.Equal(CliUpdateWay.Installer, Way(CliInstallKind.Release, Script, "0.23.0"));
+
+    [Fact]
+    public void NoTwoUpdatersForOneCopy()
+    {
+        Assert.Equal(CliUpdateWay.Winget, Way(CliInstallKind.Winget, Native, "0.50.0"));
+        Assert.Equal(CliUpdateWay.Manual, Way(CliInstallKind.Checkout, Script, "0.23.0"));
+        Assert.Equal(CliUpdateWay.Manual, Way(CliInstallKind.Custom, Native, "0.50.0"));
+    }
+
+    [Fact]
+    public void CopiesThatCannotUpdate()
+    {
+        Assert.Equal(CliUpdateWay.Manual, Way(CliInstallKind.Release, Script, "0.10.1"));
+        Assert.Equal(CliUpdateWay.Manual, Way(CliInstallKind.Release, Native, "0.50.0-dev"));
+        Assert.Equal(CliUpdateWay.Manual, CliUpdate.Way(CliInstallKind.Release, Native, null));
+        Assert.Equal(CliUpdateWay.Manual, CliUpdate.Way(null, null, null));
+    }
+
+    [Fact]
+    public void TheInstallScriptsCommand()
+    {
+        Assert.Equal(["ps", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "s.ps1", "-Update", @"C:\v\varlatch.cjs",
+                      "-Version", "0.50.0", "-Node", @"C:\node\node.exe"],
+                     CliUpdate.Installer("ps", "s.ps1", @"C:\v\varlatch.cjs", ReleaseVersion.Parse("0.50.0"), @"C:\node\node.exe"));
+        Assert.Equal(["ps", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "s.ps1", "-Update", @"C:\v\varlatch.cjs"],
+                     CliUpdate.Installer("ps", "s.ps1", @"C:\v\varlatch.cjs", null, null));
+    }
+
+    [Fact]
+    public void TheVersionsBothGenerationsPrint()
+    {
+        Assert.Equal(new ReleaseVersion(0, 23, 0), ReleaseVersion.FromCliOutput("varlatch 0.23.0 (migration 52)\n"));
+        Assert.Equal(new ReleaseVersion(0, 50, 0, "rc.3"), ReleaseVersion.FromCliOutput("varlatch 0.50.0-rc.3\n"));
+    }
 }
 
 public class ReleaseRulesTests

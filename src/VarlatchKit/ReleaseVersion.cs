@@ -52,7 +52,7 @@ public readonly record struct ReleaseVersion : IComparable<ReleaseVersion>
             int.TryParse(part, NumberStyles.None, CultureInfo.InvariantCulture, out value);
     }
 
-    /// <summary>The version in <c>varlatch --version</c> output: "varlatch 0.15.1 (migration 26)".</summary>
+    /// <summary>The version in <c>varlatch --version</c> output: "varlatch 0.15.1 (migration 26)", "varlatch 0.50.0".</summary>
     public static ReleaseVersion? FromCliOutput(string output)
     {
         var line = output.Split('\n', '\r').FirstOrDefault(l => l.Length > 0);

@@ -6,19 +6,26 @@ looks for it.
 .DESCRIPTION
 Varlatch for Windows runs this in a terminal when the CLI is not installed
 (Install in Terminal). It asks for your server's address, so it can install
-the CLI version that server runs (press Enter for the latest release), makes
-sure Node.js 22 or newer is there (offering to install it with winget), and
-downloads the release CLI. It checks the download the way
-`varlatch self-update` does: the signature on SHA256SUMS when the release
-carries one and cosign is installed, the file against SHA256SUMS, and the
-version the file reports. It shows what it checked and installs only once
-you confirm:
+the CLI version that server runs (press Enter for the latest release). Then
+it downloads what that release's SHA256SUMS lists for this PC and checks it:
 
-  %LOCALAPPDATA%\Programs\Varlatch\varlatch.cjs   the CLI
-  %LOCALAPPDATA%\Programs\Varlatch\varlatch.cmd   runs it with Node.js
+  from 0.50    varlatch.exe, a program of its own. It must match SHA256SUMS,
+               run here, and confirm that Varlatch's release workflow signed
+               SHA256SUMS.
+  before 0.50  varlatch.cjs, which Node.js 22 or newer runs (the script
+               offers to install Node.js with winget), with a varlatch.cmd
+               that runs it. It must match SHA256SUMS, whose signature is
+               checked too when the release carries one and cosign is
+               installed.
 
-and puts that directory on your user PATH, so `varlatch` works in new
-terminals. `varlatch self-update` replaces varlatch.cjs in place later.
+It shows what it checked and installs only once you confirm, in
+%LOCALAPPDATA%\Programs\Varlatch, which it puts on your user PATH, so
+`varlatch` works in new terminals. varlatch.exe takes the place of a
+varlatch.cjs and varlatch.cmd there: they go once it runs.
+
+With -Update (Update in Terminal, for a varlatch.cjs), it updates that CLI:
+to a release with varlatch.exe as above, in the CLI's own folder; to one with
+a varlatch.cjs by the CLI's own self-update.
 
 Runs in Windows PowerShell 5.1 and PowerShell 7.
 
@@ -31,6 +38,10 @@ param(
     [string]$Server,
     # A release to install, such as 0.15.1, instead of asking.
     [string]$Version,
+    # A varlatch.cjs to update, instead of installing.
+    [string]$Update,
+    # The node.exe to run a varlatch.cjs with; by default the PATH's.
+    [string]$Node,
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'Programs\Varlatch'),
     # Varlatch.exe, told about the new CLI and asked to sign in.
     [string]$App,
@@ -82,17 +93,61 @@ function Get-HostName([string]$Url) { return ($Url -replace '^[^:]+://', '') -re
 function Get-ServerVersion([string]$Url) {
     try {
         $meta = Invoke-RestMethod -Uri "$Url/v1/meta" -TimeoutSec 10 -UseBasicParsing
-        if ($meta.serverVersion -match '^\d+\.\d+\.\d+$') { return $meta.serverVersion }
+        if ($meta.serverVersion -match '^\d+\.\d+\.\d+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$') { return $meta.serverVersion }
     } catch { }
     return $null
 }
 
-function Test-ReleaseCli([string]$V) {
+# A release file, or $false when the release does not have it.
+function Get-ReleaseFile([string]$V, [string]$Name, [string]$Path) {
     try {
-        Invoke-WebRequest -Method Head -Uri "https://github.com/$Repo/releases/download/v$V/varlatch-cli-$V.cjs" `
-            -TimeoutSec 15 -UseBasicParsing -UserAgent $UserAgent | Out-Null
+        Invoke-WebRequest -Uri "https://github.com/$Repo/releases/download/v$V/$Name" -OutFile $Path `
+            -TimeoutSec 300 -UseBasicParsing -UserAgent $UserAgent | Out-Null
         return $true
-    } catch { return $false }
+    } catch {
+        Remove-Item $Path -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+}
+
+# The SHA-256 that SHA256SUMS lists for exactly that file name, once; else
+# nothing.
+function Get-ListedHash([string]$Sums, [string]$Name) {
+    $found = @(Get-Content -LiteralPath $Sums | ForEach-Object {
+        if ($_ -cmatch '^([0-9a-f]{64}) [ *](.+)$' -and $Matches[2] -ceq $Name) { $Matches[1] }
+    })
+    if ($found.Count -eq 1) { return $found[0] }
+    return $null
+}
+
+# The CLI a release has for this PC, by what its SHA256SUMS lists: the
+# program, else the single file that Node.js runs; nothing when it has neither.
+function Get-ReleaseAsset([string]$V, [string]$Sums) {
+    # A 32-bit PowerShell on a 64-bit Windows names the machine in the first.
+    $machine = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    $arch = switch ($machine) { 'AMD64' { 'amd64' } 'ARM64' { 'arm64' } default { $null } }
+    $names = @("varlatch-cli-$V.cjs")
+    if ($arch) { $names = @("varlatch-$V-windows-$arch.exe") + $names }
+    foreach ($name in $names) { if (Get-ListedHash $Sums $name) { return $name } }
+    return $null
+}
+
+function Get-Sha256([string]$Path) { return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
+
+# Whether "varlatch <version>" came back from the CLI just run.
+function Test-Reported([string]$Reported, [string]$V) {
+    return ($LASTEXITCODE -eq 0) -and ($Reported -ceq "varlatch $V" -or $Reported.StartsWith("varlatch $V "))
+}
+
+# The TypeScript CLI's single-file build names itself in its first lines.
+function Test-TypeScriptCli([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $head = New-Object byte[] 512
+        $read = $stream.Read($head, 0, $head.Length)
+        return [Text.Encoding]::ASCII.GetString($head, 0, $read).Contains('Varlatch CLI')
+    } finally { $stream.Dispose() }
 }
 
 function Get-LatestRelease {
@@ -116,7 +171,9 @@ function Get-NodeMajor {
 #
 # No named parameters: every argument, -p included, goes to the program.
 function Invoke-Quietly {
-    $program, $arguments = $args
+    $program = $args[0]
+    # An array also for one argument: splatting a string passes its characters.
+    $arguments = @($args | Select-Object -Skip 1)
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
@@ -155,58 +212,13 @@ function Add-UserPath([string]$Dir) {
     return $true
 }
 
-Write-Host 'Install the Varlatch CLI' -ForegroundColor Cyan
-Write-Host ''
-Update-SessionPath
-$target = Join-Path $InstallDir 'varlatch.cjs'
-$shim = Join-Path $InstallDir 'varlatch.cmd'
-
-if ((Test-Path $target) -and -not $Version) {
-    $have = ''
-    if ((Get-NodeMajor) -gt 0) { $have = Invoke-Quietly node $target --version }
-    Write-Host "The CLI is already installed: $target $have"
-    Write-Host 'Update it from the Varlatch panel, or with: varlatch self-update'
-    if ($App) { & $App --refresh }
-    exit 0
-}
-
-# The CLI should match the Varlatch the server runs.
-if (-not $Server -and -not $Version -and -not $Yes) {
-    Write-Host '  The CLI should match the Varlatch your server runs. Give the server''s'
-    Write-Host '  address to install that version, or press Enter for the latest release.'
-    Write-Host ''
-    $Server = Read-Host 'Server address'
-}
-$serverUrl = $null
-if ($Server) {
-    $serverUrl = ConvertTo-ServerAddress $Server
-    if (-not $serverUrl) { Stop-Install "'$Server' is not a server address, such as varlatch.example.com." }
-}
-
-if ($Version) {
-    $Version = $Version -replace '^v', ''
-} elseif ($serverUrl) {
-    $hostName = Get-HostName $serverUrl
-    $running = Get-ServerVersion $serverUrl
-    if (-not $running) {
-        Write-Host "Could not read the version $hostName runs; using the latest release."
-    } elseif (-not (Test-ReleaseCli $running)) {
-        Write-Host "$hostName runs $running, which has no release CLI; using the latest release."
-        Write-Host 'If the newer CLI does not work with it, upgrade the server (varlatch upgrade).'
-    } else {
-        Write-Host "$hostName runs Varlatch $running."
-        $Version = $running
-    }
-}
-if (-not $Version) { $Version = Get-LatestRelease }
-if (-not $Version) { Stop-Install "cannot find the latest release of $Repo (offline?)." }
-
-# Node.js 22 or newer runs the release CLI.
-if ((Get-NodeMajor) -lt 22) {
+# Node.js 22 or newer runs a varlatch.cjs; release $Version has no varlatch.exe.
+function Confirm-Node {
+    if ((Get-NodeMajor) -ge 22) { return }
     $found = (Get-Command node.exe -ErrorAction SilentlyContinue)
     $what = if ($found) { "Node.js $(Invoke-Quietly node --version) is too old" } else { 'Node.js is not installed' }
     Write-Host ''
-    Write-Host "$what; the varlatch CLI needs Node.js 22 or newer."
+    Write-Host "$what; the CLI of release $Version needs Node.js 22 or newer."
     $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
     if (-not $winget) { Stop-Install 'install Node.js 22 or newer from https://nodejs.org, then run this again.' }
     # Never without asking, even with -Yes: it changes the machine's Node.js
@@ -219,52 +231,163 @@ if ((Get-NodeMajor) -lt 22) {
     if ((Get-NodeMajor) -lt 22) { Stop-Install 'Node.js 22 or newer is still not on the PATH. Open a new terminal and run this again.' }
 }
 
-# Download and check, before anything is installed.
-$asset = "varlatch-cli-$Version.cjs"
-$base = "https://github.com/$Repo/releases/download/v$Version"
+# Puts a checked file in place: written next to it, then moved over it, so
+# there is never a half-written CLI. What was there is kept at $Backup.
+function Set-CheckedFile([string]$From, [string]$To, [string]$Hash, [string]$Backup) {
+    $next = Join-Path $InstallDir ".varlatch-new-$PID"
+    try {
+        Copy-Item -LiteralPath $From $next -Force
+        # What goes in place is what was checked.
+        if ((Get-Sha256 $next) -cne $Hash) { Stop-Install "$(Split-Path -Leaf $From) changed after it was checked. Nothing was installed." }
+        try {
+            if (Test-Path -LiteralPath $To) { [IO.File]::Replace($next, $To, $Backup) }
+            else { [IO.File]::Move($next, $To) }
+        } catch {
+            Stop-Install "could not write $To (is varlatch running?): $($_.Exception.Message)"
+        }
+    } finally {
+        Remove-Item -LiteralPath $next -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# varlatch.exe replaces the TypeScript CLI in its folder once it runs there:
+# varlatch.cjs, and the varlatch.cmd that runs it. Both use the same store of
+# sign-ins and settings.
+function Remove-TypeScriptCli {
+    $left = @()
+    $removed = $false
+    if ((Test-Path -LiteralPath $shim -PathType Leaf) -and [IO.File]::ReadAllText($shim).Trim() -ceq '@node "%~dp0varlatch.cjs" %*') {
+        try { Remove-Item -LiteralPath $shim -Force -ErrorAction Stop; $removed = $true } catch { $left += 'varlatch.cmd' }
+    }
+    if (Test-TypeScriptCli $cjs) {
+        try { Remove-Item -LiteralPath $cjs -Force -ErrorAction Stop; $removed = $true } catch { $left += 'varlatch.cjs' }
+    }
+    if ($left) { Write-Host "$($left -join ' and ') in $InstallDir could not be removed (in use?). varlatch.exe comes before it; remove it later." }
+    elseif ($removed) { Write-Host 'It replaces varlatch.cjs. Your sign-ins and settings carry over.' }
+}
+
+Write-Host $(if ($Update) { 'Update the Varlatch CLI' } else { 'Install the Varlatch CLI' }) -ForegroundColor Cyan
+Write-Host ''
+Update-SessionPath
+if ($Node) { $env:Path = "$(Split-Path -Parent $Node);$env:Path" }
+if ($Update) {
+    $InstallDir = Split-Path -Parent $Update
+    # The shim that runs varlatch.cjs stands for it.
+    if ((Split-Path -Leaf $Update) -ieq 'varlatch.cmd') { $Update = Join-Path $InstallDir 'varlatch.cjs' }
+}
+$exe = Join-Path $InstallDir 'varlatch.exe'
+$cjs = Join-Path $InstallDir 'varlatch.cjs'
+$shim = Join-Path $InstallDir 'varlatch.cmd'
+
+if (-not $Version -and -not $Update) {
+    $have = @($exe, $cjs) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if ($have) {
+        $reported = ''
+        if ($have -eq $exe) { $reported = Invoke-Quietly $exe --version }
+        elseif ((Get-NodeMajor) -gt 0) { $reported = Invoke-Quietly node $cjs --version }
+        Write-Host "The CLI is already installed: $have $reported"
+        Write-Host 'Update it from the Varlatch panel.'
+        if ($App) { & $App --refresh }
+        exit 0
+    }
+}
+
 $work = Join-Path ([IO.Path]::GetTempPath()) ("varlatch-install-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $work | Out-Null
 try {
-    Write-Host ''
-    Write-Host "Downloading $asset from $Repo..."
-    try {
-        Invoke-WebRequest -Uri "$base/$asset" -OutFile (Join-Path $work $asset) -UseBasicParsing -UserAgent $UserAgent
-        Invoke-WebRequest -Uri "$base/SHA256SUMS" -OutFile (Join-Path $work 'SHA256SUMS') -UseBasicParsing -UserAgent $UserAgent
-    } catch {
-        Stop-Install "download failed: $($_.Exception.Message)"
+    $sums = Join-Path $work 'SHA256SUMS'
+
+    # The CLI should match the Varlatch the server runs.
+    if (-not $Server -and -not $Version -and -not $Update -and -not $Yes) {
+        Write-Host '  The CLI should match the Varlatch your server runs. Give the server''s'
+        Write-Host '  address to install that version, or press Enter for the latest release.'
+        Write-Host ''
+        $Server = Read-Host 'Server address'
     }
-    $bundle = Join-Path $work 'SHA256SUMS.sigstore.json'
-    try {
-        Invoke-WebRequest -Uri "$base/SHA256SUMS.sigstore.json" -OutFile $bundle -UseBasicParsing -UserAgent $UserAgent
-    } catch {
-        Remove-Item $bundle -ErrorAction SilentlyContinue
+    $serverUrl = $null
+    if ($Server) {
+        $serverUrl = ConvertTo-ServerAddress $Server
+        if (-not $serverUrl) { Stop-Install "'$Server' is not a server address, such as varlatch.example.com." }
     }
 
-    if (Test-Path $bundle) {
+    if ($Version) {
+        $Version = $Version -replace '^v', ''
+    } elseif ($serverUrl) {
+        $hostName = Get-HostName $serverUrl
+        $running = Get-ServerVersion $serverUrl
+        if (-not $running) {
+            Write-Host "Could not read the version $hostName runs; using the latest release."
+        } elseif (-not ((Get-ReleaseFile $running 'SHA256SUMS' $sums) -and (Get-ReleaseAsset $running $sums))) {
+            Write-Host "$hostName runs $running, which has no release CLI; using the latest release."
+            Write-Host 'If the newer CLI does not work with it, upgrade the server (varlatch upgrade).'
+        } else {
+            Write-Host "$hostName runs Varlatch $running."
+            $Version = $running
+        }
+    }
+    if (-not $Version) { $Version = Get-LatestRelease }
+    if (-not $Version) { Stop-Install "cannot find the latest release of $Repo (offline?)." }
+
+    # Download and check, before anything is installed.
+    if (-not (Get-ReleaseFile $Version 'SHA256SUMS' $sums)) { Stop-Install "download failed: release $Version has no SHA256SUMS (offline?)." }
+    $asset = Get-ReleaseAsset $Version $sums
+    if (-not $asset) { Stop-Install "release $Version has no CLI for this PC. Nothing was installed." }
+    $native = $asset.EndsWith('.exe')
+    if ($Update) {
+        if (-not $native) {
+            # The CLI replaces its own file, with the same checks, and asks first.
+            Confirm-Node
+            & node $Update self-update $Version
+            exit $LASTEXITCODE
+        }
+        if ((Split-Path -Leaf $Update) -ine 'varlatch.cjs') {
+            Stop-Install "release $Version is varlatch.exe, which cannot take the place of $Update. Clear the CLI path in Settings, then install the CLI again."
+        }
+    } elseif (-not $native -and (Test-Path -LiteralPath $exe)) {
+        Stop-Install "$exe is installed and would come before the CLI of release $Version. Remove it first."
+    }
+    if (-not $native) { Confirm-Node }
+    $target = if ($native) { $exe } else { $cjs }
+
+    Write-Host ''
+    Write-Host "Downloading $asset from $Repo..."
+    $staged = Join-Path $work $asset
+    if (-not (Get-ReleaseFile $Version $asset $staged)) { Stop-Install "download failed: $asset." }
+    $bundle = Join-Path $work 'SHA256SUMS.sigstore.json'
+    $signed = Get-ReleaseFile $Version 'SHA256SUMS.sigstore.json' $bundle
+    $signature = 'none: this release carries no signature'
+    if ($signed) {
+        $signature = 'NOT checked: the release is signed, but cosign is not installed'
         $cosign = Get-Command cosign.exe -ErrorAction SilentlyContinue
         if ($cosign) {
-            Invoke-Quietly $cosign.Source verify-blob (Join-Path $work 'SHA256SUMS') --bundle $bundle `
+            Invoke-Quietly $cosign.Source verify-blob $sums --bundle $bundle `
                 --certificate-identity "https://github.com/$Repo/.github/workflows/release.yml@refs/tags/v$Version" `
                 --certificate-oidc-issuer https://token.actions.githubusercontent.com | Out-Null
             if ($LASTEXITCODE -ne 0) { Stop-Install 'the signature on SHA256SUMS does NOT verify. Nothing was installed.' }
             $signature = "verified: signed by the $Repo release workflow for v$Version"
-        } else {
-            $signature = 'NOT checked: the release is signed, but cosign is not installed'
         }
-    } else {
-        $signature = 'none: this release carries no signature'
     }
 
-    # This asset's own line; a file SHA256SUMS does not list does not pass.
-    $line = Get-Content (Join-Path $work 'SHA256SUMS') | Where-Object { $_ -match "^([0-9a-f]{64}) [ *]$([regex]::Escape($asset))$" } | Select-Object -First 1
-    if (-not $line) { Stop-Install "SHA256SUMS does not list $asset. Nothing was installed." }
-    $expected = ($line -split ' ')[0]
-    $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $work $asset)).Hash.ToLowerInvariant()
-    if ($actual -ne $expected) { Stop-Install "$asset does not match SHA256SUMS. Nothing was installed." }
+    # This asset's own line, which Get-ReleaseAsset found once.
+    $expected = Get-ListedHash $sums $asset
+    if ((Get-Sha256 $staged) -cne $expected) { Stop-Install "$asset does not match SHA256SUMS. Nothing was installed." }
 
-    $reported = Invoke-Quietly node (Join-Path $work $asset) --version
-    if ($reported -notmatch "^varlatch $([regex]::Escape($Version))( |$)") {
+    # A program must run here, and it checks the signature on SHA256SUMS
+    # itself, as Varlatch's install.ps1 has it do: every release with one is
+    # signed.
+    if ($native -and -not $signed) { Stop-Install "release $Version carries no signature. Nothing was installed." }
+    $global:LASTEXITCODE = -1
+    try {
+        $reported = if ($native) { Invoke-Quietly $staged --version } else { Invoke-Quietly node $staged --version }
+    } catch { $reported = '' }
+    if (-not (Test-Reported "$reported" $Version)) {
         Stop-Install "the downloaded CLI reports `"$reported`", expected varlatch $Version. Nothing was installed."
+    }
+    if ($native) {
+        $global:LASTEXITCODE = -1
+        Invoke-Quietly $staged verify-release --version $Version --sums $sums --bundle $bundle --file "$staged=$asset" | Out-Null
+        if ($LASTEXITCODE -ne 0) { Stop-Install 'the signature on SHA256SUMS does NOT verify. Nothing was installed.' }
+        $signature = "verified: signed by the $Repo release workflow for v$Version"
     }
 
     Write-Host ''
@@ -279,18 +402,32 @@ try {
         exit 130
     }
 
-    # Written next to its place, then moved over it, so there is never a
-    # half-written CLI.
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    $next = Join-Path $InstallDir ".varlatch-new-$PID"
-    Copy-Item (Join-Path $work $asset) $next -Force
-    if (Test-Path $target) { [IO.File]::Replace($next, $target, $null) } else { [IO.File]::Move($next, $target) }
-    [IO.File]::WriteAllText($shim, "@node `"%~dp0varlatch.cjs`" %*`r`n", (New-Object System.Text.UTF8Encoding $false))
+    $had = Test-Path -LiteralPath $target
+    $backup = Join-Path $InstallDir "varlatch-old-$PID.bak"
+    Set-CheckedFile $staged $target $expected $backup
+    if (-not $native) { [IO.File]::WriteAllText($shim, "@node `"%~dp0varlatch.cjs`" %*`r`n", (New-Object System.Text.UTF8Encoding $false)) }
+
+    # What was there goes only once the new CLI runs in its place.
+    $global:LASTEXITCODE = -1
+    try {
+        $reported = if ($native) { Invoke-Quietly $target --version } else { Invoke-Quietly node $target --version }
+    } catch { $reported = '' }
+    if (-not (Test-Reported "$reported" $Version)) {
+        Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+        if ($had) { [IO.File]::Move($backup, $target) }
+        if ($had -or (Test-TypeScriptCli $cjs)) { Stop-Install "the new CLI does not run at $target. The CLI that was there is left in place." }
+        Stop-Install "the new CLI does not run at $target. It was removed again."
+    }
+    if ($had) { Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue }
+    Write-Host "Installed: $reported"
+    if ($native) { Remove-TypeScriptCli }
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
 
-Write-Host "Installed: $(Invoke-Quietly node $target --version)"
+# Updated in its folder, which is found as it was.
+if ($Update) { exit 0 }
 if (-not $NoPath) {
     if (Add-UserPath $InstallDir) {
         Write-Host "Added $InstallDir to your PATH: varlatch works in new terminals."
@@ -307,6 +444,6 @@ if ($App -and (Test-Path $App)) {
     & $App --sign-in $serverUrl
     Write-Host 'Finish signing in in your browser; the Varlatch panel shows how it goes.'
 } else {
-    & node $target login --server $serverUrl
+    if ($native) { & $target login --server $serverUrl } else { & node $target login --server $serverUrl }
 }
 exit 0
