@@ -30,17 +30,29 @@ internal static class Terminal
     /// <param name="elevated">Run as administrator, after Windows asks.</param>
     public static void Run(string title, IReadOnlyList<string> command, bool elevated = false)
     {
+        if (elevated)
+        {
+            try
+            {
+                // Elevated runs never write a .ps1 to temp: pass the fixed
+                // bootstrap with values as Base64 JSON data via -EncodedCommand.
+                string[] elevatedArgs = ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-EncodedCommand", TerminalScript.EncodedCommand(title, command)];
+                Start(PowerShell, elevatedArgs, shell: true, verb: "runas");
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+            {
+                Log.Write($"cannot run {title}: {e.Message}");
+            }
+            return;
+        }
         var script = Path.Combine(Path.GetTempPath(), $"varlatch-{Guid.NewGuid().ToString("N")[..8]}.ps1");
         try
         {
             // With a BOM, so Windows PowerShell reads it as UTF-8.
             File.WriteAllText(script, TerminalScript.Build(title, command), new UTF8Encoding(true));
             string[] arguments = ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script];
-            if (elevated)
-            {
-                Start(PowerShell, arguments, shell: true, verb: "runas");
-            }
-            else if (WindowsTerminal is { } wt)
+            if (WindowsTerminal is { } wt)
             {
                 Start(wt, ["-w", "new", "--title", title, PowerShell, .. arguments], shell: false);
             }
@@ -51,7 +63,6 @@ internal static class Terminal
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
-            // Includes "no" at the administrator prompt.
             Log.Write($"cannot run {title}: {e.Message}");
             try { File.Delete(script); } catch (IOException) { }
         }

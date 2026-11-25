@@ -14,7 +14,7 @@ public sealed record CliInvocation(CliCommand Command, IReadOnlyDictionary<strin
     {
         var process = new CliProcess(Command.Executable, [.. Command.Prefix, .. arguments], Environment, onStdout);
         if (Unsafe(arguments) is { } argument)
-            process.Refuse($"cannot pass \"{argument}\" to {Path.GetFileName(Command.Path)}. Set the CLI path in Settings to the varlatch.cjs it runs.");
+            process.Refuse($"cannot pass \"{argument}\" to {Path.GetFileName(Command.Path)}. Set the CLI path in Settings to the file it runs.");
         return process;
     }
 

@@ -29,6 +29,9 @@ internal sealed class AppController
     public PanelWindow Panel { get; private set; } = null!;
     public LaunchAtLogin LoginItem { get; } = new(new CurrentUserRegistry(), Environment.ProcessPath!);
     private SettingsWindow? settingsWindow;
+    private readonly List<string> pendingMigrationResults = [];
+    private ReleaseVersion? confirmedNativeRelease;
+    private bool nativeTargetChecked;
 
     /// <summary>Servers with a logout running.</summary>
     public HashSet<string> LoggingOut { get; } = [];
@@ -80,7 +83,7 @@ internal sealed class AppController
         // The CLI prints the sign-in page's address; the app opens it.
         SignIn.LinkFound += (_, link) => Open(link);
 
-        Releases.NewRelease += version => Notifier.PostRelease(version, Store.CliVersion, UpdateFor(version));
+        Releases.NewRelease += version => Notifier.PostRelease(version, Store.CliVersion, UpdateWay);
         Releases.Changed += Announce;
         ReleaseVersion? lastVersion = null;
         Store.PropertyChanged += (_, e) =>
@@ -325,13 +328,16 @@ internal sealed class AppController
 
         async Task Opened()
         {
+            ApplyPendingMigrations();
             await RefreshAll();
             CheckReleases(ReleaseRules.PanelMaxAge);
+            if (Store.CliState is CliState.NodeMissing) _ = CheckNativeTargetOnceAsync();
         }
     }
 
     public async Task RefreshAll()
     {
+        ApplyPendingMigrations();
         await Store.RefreshVersionAsync();
         await Store.RefreshAsync();
     }
@@ -481,34 +487,103 @@ internal sealed class AppController
     /// <summary>A newer CLI release, with release checks on.</summary>
     public ReleaseVersion? AvailableRelease => Store.Preferences.CheckUpdates ? Releases.Available(Store.CliVersion) : null;
 
-    public enum Update
+    /// <summary>
+    /// One-shot check from the panel when Node.js is missing or too old:
+    /// resolves the latest release and confirms its SHA256SUMS lists the
+    /// native Windows asset for this PC's architecture before offering Update the CLI.
+    /// </summary>
+    public async Task CheckNativeTargetOnceAsync()
     {
-        /// <summary><c>varlatch self-update &lt;version&gt;</c> (CLI 0.11.0 and newer).</summary>
-        SelfUpdate,
-        /// <summary>Release notes only: updated the way it was installed.</summary>
-        Manual,
+        if (nativeTargetChecked) return;
+        nativeTargetChecked = true;
+        var candidate = ReleaseVersion.Parse(Releases.Cache.Latest);
+        if (candidate is null || candidate < ReleaseVersion.NativeCli)
+        {
+            var tag = await ReleaseChecker.LatestTagAsync();
+            candidate = ReleaseVersion.Parse(tag);
+        }
+        if (candidate is not { } version || version < ReleaseVersion.NativeCli) return;
+        var hasAsset = await CliUpdate.CheckNativeAssetAsync(version, System.Runtime.InteropServices.RuntimeInformation.OSArchitecture);
+        if (hasAsset)
+        {
+            confirmedNativeRelease = version;
+            Announce();
+        }
     }
 
-    public Update UpdateFor(ReleaseVersion version) =>
-        CliInstall == CliInstallKind.Release && Store.CliVersion is { } v && v >= ReleaseVersion.SelfUpdate
-            ? Update.SelfUpdate
-            : Update.Manual;
+    /// <summary>A native release (&gt;= 0.50.0) confirmed in SHA256SUMS for this architecture and eligible for <paramref name="node"/>.</summary>
+    public ReleaseVersion? NativeUpdateTargetWithoutNode(CliState.NodeMissing node) =>
+        CliUpdate.NativeTargetWithoutNode(node.Path, node.Script, Store.CliVersion, confirmedNativeRelease, confirmedNativeRelease is not null);
+
+    public CliUpdateWay UpdateWay => CliUpdate.Way(CliInstall, Store.CliCommand, Store.CliVersion);
+
+    /// <summary>Whether the app can update the CLI in Terminal.</summary>
+    public bool UpdatesInTerminal => UpdateWay is CliUpdateWay.SelfUpdate or CliUpdateWay.Installer;
 
     /// <summary>
-    /// Updates the CLI in Terminal with its own self-update, which shows what
-    /// it checked and asks before replacing anything. A CLI in a folder this
-    /// user cannot write to updates from an administrator PowerShell.
+    /// Updates the CLI in Terminal with its own self-update, or the install
+    /// script, which show what they checked and ask before replacing
+    /// anything. A CLI in a folder this user cannot write to updates from an
+    /// administrator PowerShell.
     /// </summary>
     public void UpdateCli(ReleaseVersion version)
     {
-        if (UpdateFor(version) != Update.SelfUpdate || Store.CliCommand is not { } command)
+        if (!UpdatesInTerminal || Store.CliCommand is not { } command)
         {
             Open(ReleaseChecker.ReleaseUrl(version));
             return;
         }
-        string[] run = [command.Executable, .. command.Prefix, "self-update", version.ToString()];
-        var elevated = !VarlatchKit.CliInstall.DirectoryWritable(command.CodePath);
-        Terminal.Run("Updating the Varlatch CLI", run, elevated);
-        After(TimeSpan.FromSeconds(20), () => _ = RefreshAll());
+        IReadOnlyList<string> run;
+        if (UpdateWay == CliUpdateWay.Installer)
+        {
+            var resultFile = NewMigrationResultFile();
+            run = CliUpdate.Installer(Terminal.PowerShell, InstallScript, command.CodePath, version, command.Executable, resultFile);
+        }
+        else
+        {
+            run = [command.Executable, .. command.Prefix, "self-update", version.ToString()];
+        }
+        RunUpdate(run, command.CodePath);
+    }
+
+    /// <summary>
+    /// Updates an eligible <c>varlatch.cjs</c> that has no Node.js to run it
+    /// to a confirmed native release, in Terminal.
+    /// </summary>
+    public void UpdateCliWithoutNode(CliState.NodeMissing node, ReleaseVersion target)
+    {
+        if (NativeUpdateTargetWithoutNode(node) is null) return;
+        var resultFile = NewMigrationResultFile();
+        RunUpdate(CliUpdate.Installer(Terminal.PowerShell, InstallScript, node.Script, target, node: null, resultFile: resultFile), node.Script);
+    }
+
+    private string NewMigrationResultFile()
+    {
+        Directory.CreateDirectory(AppPaths.StateDirectory);
+        var path = Path.Combine(AppPaths.StateDirectory, $"migration-{Guid.NewGuid():N}.json");
+        pendingMigrationResults.Add(path);
+        return path;
+    }
+
+    private void ApplyPendingMigrations()
+    {
+        if (pendingMigrationResults.Count == 0) return;
+        var merged = false;
+        for (var i = pendingMigrationResults.Count - 1; i >= 0; i--)
+        {
+            if (CliUpdate.TryMergeMigrationResult(pendingMigrationResults[i], Settings))
+            {
+                pendingMigrationResults.RemoveAt(i);
+                merged = true;
+            }
+        }
+        if (merged) PreferencesChanged();
+    }
+
+    private void RunUpdate(IReadOnlyList<string> command, string path)
+    {
+        Terminal.Run("Updating the Varlatch CLI", command, elevated: !VarlatchKit.CliInstall.DirectoryWritable(path));
+        After(TimeSpan.FromSeconds(10), () => _ = RefreshAll());
+        After(TimeSpan.FromSeconds(25), () => _ = RefreshAll());
     }
 }

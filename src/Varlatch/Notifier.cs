@@ -110,17 +110,22 @@ internal sealed class Notifier
     }
 
     /// <summary>A newer CLI release, once per release.</summary>
-    public void PostRelease(ReleaseVersion version, ReleaseVersion? current, AppController.Update update)
+    public void PostRelease(ReleaseVersion version, ReleaseVersion? current, CliUpdateWay way)
     {
         var have = current is { } c ? $" (you have {c})" : "";
-        var selfUpdate = update == AppController.Update.SelfUpdate;
-        var body = selfUpdate ? $"Update with varlatch self-update{have}." : $"A new release of the CLI is out{have}.";
+        var body = way switch
+        {
+            CliUpdateWay.SelfUpdate => $"Update with varlatch self-update{have}.",
+            CliUpdateWay.Winget => $"Update with winget upgrade varlatch{have}.",
+            _ => $"A new release of the CLI is out{have}.",
+        };
+        var update = way is CliUpdateWay.SelfUpdate or CliUpdateWay.Installer;
         var notes = $"action={Action.Notes}&version={version}";
         var buttons = new List<(string, string)>();
-        if (selfUpdate) buttons.Add(("Update", $"action={Action.Update}&version={version}"));
+        if (update) buttons.Add(("Update", $"action={Action.Update}&version={version}"));
         buttons.Add(("Release notes", notes));
         Show($"Varlatch CLI {version} is available", body, notes, buttons, sound: false, "release-" + version, "release");
-        Record($"[release{(selfUpdate ? "-update" : "")}] Varlatch CLI {version} is available");
+        Record($"[release{(update ? "-update" : "")}] Varlatch CLI {version} is available");
     }
 
     private static string Args(string action, string server) => $"action={action}&server={Uri.EscapeDataString(server)}";

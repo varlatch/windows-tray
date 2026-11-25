@@ -55,6 +55,19 @@ public class CliInstallTests
         Assert.Equal(CliInstallKind.Release, CliInstall.Kind(new CliCommand(shim, @"C:\node\node.exe", [script], script)));
     }
 
+    private static CliCommand Program(string path) => new(path, path, []);
+
+    [Fact]
+    public void NativeCli() =>
+        Assert.Equal(CliInstallKind.Release, CliInstall.Kind(Program(File(@"Programs\Varlatch\varlatch.exe", "MZ\u0090"))));
+
+    [Fact]
+    public void WingetsCopy()
+    {
+        Assert.Equal(CliInstallKind.Winget, CliInstall.Kind(Program(File(@"Microsoft\WinGet\Links\varlatch.exe", "MZ"))));
+        Assert.Equal(CliInstallKind.Winget, CliInstall.Kind(Program(File(@"Microsoft\WinGet\Packages\Varlatch.CLI_x\varlatch.exe", "MZ"))));
+    }
+
     [Fact]
     public void SourceCheckout()
     {
@@ -69,6 +82,125 @@ public class CliInstallTests
 
     [Fact]
     public void Writable() => Assert.True(CliInstall.DirectoryWritable(File("a.txt", "")));
+}
+
+public class CliUpdateTests
+{
+    private static readonly CliCommand Script = new(@"C:\v\varlatch.cjs", @"C:\node\node.exe", [@"C:\v\varlatch.cjs"], @"C:\v\varlatch.cjs");
+    private static readonly CliCommand Native = new(@"C:\v\varlatch.exe", @"C:\v\varlatch.exe", []);
+
+    private static CliUpdateWay Way(CliInstallKind kind, CliCommand command, string version) =>
+        CliUpdate.Way(kind, command, ReleaseVersion.Parse(version));
+
+    [Fact]
+    public void TheNativeCliUpdatesItself()
+    {
+        Assert.Equal(CliUpdateWay.SelfUpdate, Way(CliInstallKind.Release, Native, "0.50.0"));
+        Assert.Equal(CliUpdateWay.SelfUpdate, Way(CliInstallKind.Release, Native, "0.50.0-rc.3"));
+    }
+
+    [Fact]
+    public void TheSingleFileGoesThroughTheInstallScript() =>
+        Assert.Equal(CliUpdateWay.Installer, Way(CliInstallKind.Release, Script, "0.23.0"));
+
+    [Fact]
+    public void NoTwoUpdatersForOneCopy()
+    {
+        Assert.Equal(CliUpdateWay.Winget, Way(CliInstallKind.Winget, Native, "0.50.0"));
+        Assert.Equal(CliUpdateWay.Manual, Way(CliInstallKind.Checkout, Script, "0.23.0"));
+        Assert.Equal(CliUpdateWay.Manual, Way(CliInstallKind.Custom, Native, "0.50.0"));
+    }
+
+    [Fact]
+    public void CopiesThatCannotUpdate()
+    {
+        Assert.Equal(CliUpdateWay.Manual, Way(CliInstallKind.Release, Script, "0.10.1"));
+        Assert.Equal(CliUpdateWay.Manual, Way(CliInstallKind.Release, Native, "0.50.0-dev"));
+        Assert.Equal(CliUpdateWay.Manual, CliUpdate.Way(CliInstallKind.Release, Native, null));
+        Assert.Equal(CliUpdateWay.Manual, CliUpdate.Way(null, null, null));
+    }
+
+    [Fact]
+    public void TheInstallScriptsCommand()
+    {
+        Assert.Equal(["ps", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "s.ps1", "-Update", @"C:\v\varlatch.cjs",
+                      "-Version", "0.50.0", "-Node", @"C:\node\node.exe", "-ResultFile", @"C:\s\mig.json"],
+                     CliUpdate.Installer("ps", "s.ps1", @"C:\v\varlatch.cjs", ReleaseVersion.Parse("0.50.0"), @"C:\node\node.exe", @"C:\s\mig.json"));
+        Assert.Equal(["ps", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "s.ps1", "-Update", @"C:\v\varlatch.cjs"],
+                     CliUpdate.Installer("ps", "s.ps1", @"C:\v\varlatch.cjs", null, null));
+    }
+
+    [Fact]
+    public void TryMergeMigrationResultMergesAtomicallyAndRemovesResultFile()
+    {
+        var dir = TestDirectory.Path("mig-merge");
+        Directory.CreateDirectory(dir);
+        var settingsPath = Path.Combine(dir, "settings.json");
+        var exePath = Path.Combine(dir, "varlatch.exe");
+        var resultPath = Path.Combine(dir, "migration-1.json");
+        File.WriteAllText(exePath, "MZ");
+        var settings = new SettingsFile(settingsPath);
+        settings.Save(new Preferences(cliPath: Path.Combine(dir, "varlatch.cjs"), checkUpdates: true));
+        File.WriteAllText(resultPath, System.Text.Json.JsonSerializer.Serialize(new { migratedFrom = Path.Combine(dir, "varlatch.cjs"), migratedTo = exePath }));
+
+        Assert.True(CliUpdate.TryMergeMigrationResult(resultPath, settings));
+        Assert.False(File.Exists(resultPath));
+        Assert.Equal(exePath, settings.Preferences.MigratedCli);
+        Assert.True(settings.Preferences.CheckUpdates);
+    }
+
+    [Fact]
+    public void NativeTargetWithoutNodeEnforcesEligibilityAndNativeTarget()
+    {
+        var dir = TestDirectory.Path("nonode-elig");
+        Directory.CreateDirectory(dir);
+        var cjs = Path.Combine(dir, "varlatch.cjs");
+        File.WriteAllText(cjs, "#!/usr/bin/env node\n/*! Varlatch CLI. Copyright 2026 Robotsson. */\n");
+        var shim = Path.Combine(dir, "varlatch.cmd");
+        File.WriteAllText(shim, "@node \"%~dp0varlatch.cjs\" %*\r\n");
+        var other = Path.Combine(dir, "other.cjs");
+        File.WriteAllText(other, "#!/usr/bin/env node\n/*! Varlatch CLI. Copyright 2026 Robotsson. */\n");
+        var custom = Path.Combine(dir, "custom", "varlatch.cjs");
+        Directory.CreateDirectory(Path.GetDirectoryName(custom)!);
+        File.WriteAllText(custom, "console.log(1);\n");
+        var checkoutDir = Path.Combine(dir, "repo");
+        Directory.CreateDirectory(Path.Combine(checkoutDir, ".git"));
+        var checkoutCli = Path.Combine(checkoutDir, "varlatch.cjs");
+        File.WriteAllText(checkoutCli, "/*! Varlatch CLI. */\n");
+
+        var v10 = ReleaseVersion.Parse("0.10.9");
+        var v23 = ReleaseVersion.Parse("0.23.0");
+        var vDev = ReleaseVersion.Parse("0.23.0-dev");
+        var v50 = ReleaseVersion.Parse("0.50.0");
+
+        // Native asset must be confirmed in SHA256SUMS and >= 0.50.0.
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, cjs, v23, null, true));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, cjs, v23, v23, true));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, cjs, v23, v50, false));
+        // Source version eligibility (too old or -dev refused).
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, cjs, v10, v50, true));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(cjs, cjs, vDev, v50, true));
+        // Eligible with confirmed native asset:
+        Assert.Equal(v50, CliUpdate.NativeTargetWithoutNode(cjs, cjs, v23, v50, true));
+        Assert.Equal(v50, CliUpdate.NativeTargetWithoutNode(shim, cjs, null, v50, true));
+        // Wrong filename, custom script, or checkout: ineligible.
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(other, other, v23, v50, true));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(custom, custom, v23, v50, true));
+        Assert.Null(CliUpdate.NativeTargetWithoutNode(checkoutCli, checkoutCli, v23, v50, true));
+        // HasAssetInSums requires exactly one valid 64-hex line for this arch's asset.
+        var asset = CliUpdate.NativeAssetName(v50!.Value, System.Runtime.InteropServices.Architecture.X64);
+        Assert.Equal("varlatch-0.50.0-windows-amd64.exe", asset);
+        Assert.True(CliUpdate.HasAssetInSums($"{new string('a', 64)}  {asset}\n", asset));
+        Assert.False(CliUpdate.HasAssetInSums($"{new string('a', 64)}  other.exe\n", asset));
+        Assert.False(CliUpdate.HasAssetInSums($"{new string('a', 64)}  {asset}\n{new string('b', 64)}  {asset}\n", asset));
+    }
+
+    [Fact]
+    public void TheVersionsBothGenerationsPrint()
+    {
+        Assert.Equal(new ReleaseVersion(0, 23, 0), ReleaseVersion.FromCliOutput("varlatch 0.23.0 (migration 52)\n"));
+        Assert.Equal(new ReleaseVersion(0, 50, 0, "rc.3"), ReleaseVersion.FromCliOutput("varlatch 0.50.0-rc.3\n"));
+    }
 }
 
 public class ReleaseRulesTests

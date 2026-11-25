@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
-      # The fake CLI the tests run is a Node.js script, as the release CLI is.
+      # The fake CLI the tests run is a Node.js script, as the release CLI is before 0.50.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -27,14 +27,17 @@ jobs:
         shell: powershell
         run: |
           $failed = $false
-          foreach ($file in Get-ChildItem scripts -Filter *.ps1) {
+          foreach ($file in Get-ChildItem scripts, tests -Filter *.ps1) {
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors)
             foreach ($e in $errors) { $failed = $true; Write-Host "$($file.Name):$($e.Extent.StartLineNumber): $($e.Message)" }
           }
           if ($failed) { exit 1 }
+      - name: CLI installer tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/install-cli.tests.ps1
       - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
-      # Install in Terminal, against a real release: it must check the
+      # Install in Terminal, against real releases: it must check the
       # signature, not just the checksum.
       - name: The CLI installer installs a checked release CLI
         shell: powershell
@@ -44,6 +47,22 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           if ($out -notmatch 'signature: verified') { Write-Host 'The signature was not verified.'; exit 1 }
           & "$env:RUNNER_TEMP\cli\varlatch.cmd" --version
+
+          $out = scripts/install-cli.ps1 -Version 0.50.0-rc.3 -Yes -NoPath -InstallDir "$env:RUNNER_TEMP\native" *>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if ($out -notmatch 'signature: verified') { Write-Host 'The native release signature was not verified.'; exit 1 }
+          & "$env:RUNNER_TEMP\native\varlatch.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+          $out = scripts/install-cli.ps1 -Update "$env:RUNNER_TEMP\cli\varlatch.cjs" -Version 0.50.0-rc.3 -Yes -NoPath *>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if ($out -notmatch 'signature: verified') { Write-Host 'The update signature was not verified.'; exit 1 }
+          if (Test-Path "$env:RUNNER_TEMP\cli\varlatch.cjs") { Write-Host 'varlatch.cjs was not removed.'; exit 1 }
+          if (Test-Path "$env:RUNNER_TEMP\cli\varlatch.cmd") { Write-Host 'varlatch.cmd was not removed.'; exit 1 }
+          & "$env:RUNNER_TEMP\cli\varlatch.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: Release archives build
         shell: powershell
         run: scripts/build.ps1 -Version 0.0.0

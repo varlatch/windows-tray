@@ -155,7 +155,7 @@ internal sealed class PanelView
         if (app.AvailableRelease is { } release)
         {
             children.Add(Cached($"release-divider", () => Divider(16, 4)));
-            children.Add(Cached($"release:{release}:{app.UpdateFor(release)}", () => UpdateView(release)));
+            children.Add(Cached($"release:{release}:{app.UpdateWay}", () => UpdateView(release)));
         }
         SetChildren(body, children);
 
@@ -204,7 +204,8 @@ internal sealed class PanelView
                     Abbreviated(unusable.Path), error: true, Button("Settings", app.OpenSettings)));
                 yield break;
             case CliState.NodeMissing node:
-                yield return Cached($"node:{node.Path}:{node.Found}", () => NodeView(node));
+                var nativeTarget = app.NativeUpdateTargetWithoutNode(node);
+                yield return Cached($"node:{node.Path}:{node.Script}:{node.Found}:{nativeTarget}", () => NodeView(node, nativeTarget));
                 yield break;
             case CliState.Unsupported:
                 yield return Cached("unsupported", () => Message(Glyphs.Warning, "This varlatch CLI is too old",
@@ -330,26 +331,33 @@ internal sealed class PanelView
         return view;
     }
 
-    private UIElement NodeView(CliState.NodeMissing node)
+    private UIElement NodeView(CliState.NodeMissing node, ReleaseVersion? nativeTarget)
     {
         var title = node.Found is { } found ? $"Node.js {found} is too old" : "Node.js is not installed";
-        var detail = "The varlatch CLI runs on Node.js 22 or newer"
-                     + (AppController.Winget is null ? "." : $", which winget installs as {AppController.NodePackage}.");
+        var wingetText = AppController.Winget is null ? "." : $", which winget installs as {AppController.NodePackage}.";
         var install = AppController.Winget is null
             ? Button("Get Node.js", app.InstallNode, accent: true)
             : Button("Install in Terminal", app.InstallNode, accent: true);
-        return Message(Glyphs.Code, title, detail, false, install);
+        if (nativeTarget is { } target)
+        {
+            var detail = $"This varlatch CLI runs on Node.js 22 or newer{wingetText} Varlatch {target} does not need Node.js.";
+            return Message(Glyphs.Code, title, detail, false, install, Button("Update the CLI", () => app.UpdateCliWithoutNode(node, target)));
+        }
+        return Message(Glyphs.Code, title, $"The varlatch CLI runs on Node.js 22 or newer{wingetText}", false, install);
     }
 
     /// <summary>A newer CLI release (with release checks on): how to update this CLI.</summary>
     private UIElement UpdateView(ReleaseVersion release)
     {
-        var update = app.UpdateFor(release);
-        var detail = update == AppController.Update.SelfUpdate
-            ? "Update: run varlatch self-update, which checks the download and asks before replacing anything."
-            : "Update it the way you installed it.";
+        var detail = app.UpdateWay switch
+        {
+            CliUpdateWay.SelfUpdate => "Update: run varlatch self-update, which checks the download and asks before replacing anything.",
+            CliUpdateWay.Installer => "Update in Terminal checks the download and asks before replacing anything.",
+            CliUpdateWay.Winget => "Update: run winget upgrade varlatch.",
+            _ => "Update it the way you installed it.",
+        };
         var buttons = new List<UIElement> { Button("Release notes", () => app.Open(ReleaseChecker.ReleaseUrl(release))) };
-        if (update == AppController.Update.SelfUpdate) buttons.Add(Button("Update in Terminal", () => app.UpdateCli(release)));
+        if (app.UpdatesInTerminal) buttons.Add(Button("Update in Terminal", () => app.UpdateCli(release)));
         var view = Message(Glyphs.Download, $"CLI {release} is available", detail, false, buttons.ToArray());
         ((FontIcon)view.Children[0]).Style = Style("VarlatchExpiringGlyph");
         return view;

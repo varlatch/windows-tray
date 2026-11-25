@@ -74,26 +74,31 @@ starts runs in a job object that Windows closes with it.
 Without the `varlatch` CLI, the panel explains what it is for and offers
 **Install in Terminal**. That opens a terminal that asks for your server's
 address, so it can install the CLI version that server runs (press Enter
-for the latest release). The release CLI runs on Node.js 22 or newer; when
-that is missing, the terminal offers to install it with winget
-(`OpenJS.NodeJS.LTS`). It then downloads the release CLI and checks it the
-way `varlatch self-update` does: the signature on `SHA256SUMS` when the
-release carries one and [cosign](https://docs.sigstore.dev/cosign/) is
-installed, the file against `SHA256SUMS`, and the version it reports. It
-shows what it checked, installs only once you confirm, and offers the first
-sign-in, which the panel then shows:
+for the latest release). Releases from 0.50 ship `varlatch.exe`, a
+standalone program that needs no Node.js; releases before 0.50 ship
+`varlatch.cjs`, which runs on Node.js 22 or newer (when that is missing,
+the terminal offers to install it with winget, `OpenJS.NodeJS.LTS`). The
+script downloads over HTTPS from GitHub, checks the file's SHA-256 against
+`SHA256SUMS`, verifies the Sigstore signature independently when
+[cosign](https://docs.sigstore.dev/cosign/) is installed (and without
+cosign, `varlatch.exe` runs its own `verify-release` bootstrap check, not
+an independent check), checks the version it reports, shows what it
+checked, installs only once you confirm, and offers the first sign-in,
+which the panel then shows:
 
 ```text
-%LOCALAPPDATA%\Programs\Varlatch\varlatch.cjs   the CLI
-%LOCALAPPDATA%\Programs\Varlatch\varlatch.cmd   runs it with Node.js
+%LOCALAPPDATA%\Programs\Varlatch\varlatch.exe   the CLI (0.50 and later)
+%LOCALAPPDATA%\Programs\Varlatch\varlatch.cjs   the CLI (before 0.50)
+%LOCALAPPDATA%\Programs\Varlatch\varlatch.cmd   runs varlatch.cjs with Node.js
 ```
 
 It also puts that directory on your user `PATH`, so `varlatch` works in new
 terminals, as the Varlatch docs install it on Windows.
 
-With the CLI but no Node.js, the panel offers to install Node.js with winget
-in a terminal (or links to nodejs.org without winget), and picks it up once
-it is there.
+With a release `varlatch.cjs` CLI and no Node.js 22 or newer, the panel
+offers to install Node.js with winget in a terminal (or links to
+nodejs.org without winget), and once a 0.50 or newer release is known,
+also offers **Update the CLI** to move to `varlatch.exe` without Node.js.
 
 With the CLI but no server known yet, the panel asks for the server's
 address (`varlatch.example.com`; `https://` is added when no scheme is
@@ -130,12 +135,16 @@ servers** is on.
 
 With **Check for new CLI releases** on, the panel's footer shows when a
 newer CLI release is out, with **Release notes** and, for the release CLI,
-**Update in Terminal**: `varlatch self-update`, which checks the download
-and asks before replacing anything (Varlatch 0.11.0 and newer). When this
-user cannot write the CLI's folder (an install under Program Files), the
-update runs in an administrator PowerShell, after Windows asks. A CLI built
-from a source checkout, or installed some other way, gets the release
-notes. A new release also triggers one notification.
+**Update in Terminal**: `varlatch self-update` for `varlatch.exe`, or the
+install script for a `varlatch.cjs` (which hands off to `self-update` for
+pre-0.50 releases and installs `varlatch.exe` in its place from 0.50,
+keeping your sign-ins). Both check the download and ask before replacing
+anything (Varlatch 0.11.0 and newer). When this user cannot write the CLI's
+folder (an install under Program Files), the update runs in an
+administrator PowerShell, after Windows asks. A CLI installed with winget
+is left to `winget upgrade varlatch`; one built from a source checkout, or
+installed some other way, gets the release notes. A new release also
+triggers one notification.
 
 The app updates the way it installs: run the install command again. It
 asks the running app to quit (a sign-in under way is cancelled), replaces
@@ -178,22 +187,26 @@ reads it again when it changes, so it can be edited by hand too:
 - **CLI path** (automatic): the CLI to run, for one installed somewhere
   else or a development build. **Browse…** picks the file. A `.cjs` or
   `.js` file runs with Node.js; a `.cmd`, `.exe`, or `.ps1` runs as it is.
+  If the installer migrates a configured `varlatch.cjs` or `varlatch.cmd`
+  to `varlatch.exe` in the same folder and records that migration in
+  `settings.json`, the app follows it to `varlatch.exe`.
 - **Check for new CLI releases** (off).
 
 ## Finding the CLI
 
 The app looks for the CLI in this order: the path set in Settings, then
-`%LOCALAPPDATA%\Programs\Varlatch\varlatch.cjs`, then `varlatch.exe`,
-`varlatch.cmd`, or `varlatch.bat` on the `PATH`. An app started at login
-keeps the `PATH` it got then, so the app reads your user and system `PATH`
-from the registry each time it looks: a CLI or Node.js installed since is
-found without restarting anything.
+`%LOCALAPPDATA%\Programs\Varlatch\varlatch.exe`, then `varlatch.cjs` in
+the same folder, then `varlatch.exe`, `varlatch.cmd`, or `varlatch.bat` on
+the `PATH`. An app started at login keeps the `PATH` it got then, so the
+app reads your user and system `PATH` from the registry each time it looks:
+a CLI or Node.js installed since is found without restarting anything.
 
-The release CLI is a script that Node.js runs. The app finds `node.exe` on
-the `PATH` or where its installers put it (the Node.js installer and
-winget, nvm-windows, Volta, Scoop), and runs the script with it directly,
-also when your `PATH` has a `varlatch.cmd` that runs it: cancelling a
-sign-in then ends the CLI itself, not a `cmd.exe` in front of it.
+From 0.50, the release CLI is `varlatch.exe` and runs directly. Before
+0.50, it is a script that Node.js runs: the app finds `node.exe` on the
+`PATH` or where its installers put it (the Node.js installer and winget,
+nvm-windows, Volta, Scoop), and runs the script with it directly, also when
+your `PATH` has a `varlatch.cmd` that runs it, so cancelling a sign-in ends
+the CLI itself, not a `cmd.exe` in front of it.
 
 The app opens the sign-in page itself and sets `VARLATCH_NO_BROWSER=1` for
 the CLI, so a CLI that opens the browser on Windows too does not open a
@@ -243,7 +256,8 @@ CLI and your sign-ins stay until you remove them: delete
 ## Building from source
 
 For working on the app. Needs the [.NET 10 SDK](https://dotnet.microsoft.com/download)
-and, for the tests, Node.js 22 or newer; Visual Studio is not required.
+and, for the tests (which also exercise the pre-0.50 CLI), Node.js 22 or
+newer; Visual Studio is not required.
 
 ```powershell
 dotnet test tests/VarlatchKit.Tests

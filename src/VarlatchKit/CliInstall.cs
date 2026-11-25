@@ -3,8 +3,13 @@ namespace VarlatchKit;
 /// <summary>How the CLI is installed, which decides how it is updated.</summary>
 public enum CliInstallKind
 {
-    /// <summary>The single-file release build: <c>varlatch self-update</c> (0.11.0+).</summary>
+    /// <summary>
+    /// A release's CLI: <c>varlatch.exe</c> (0.50 and later), or the single
+    /// file that Node.js runs.
+    /// </summary>
     Release,
+    /// <summary>Installed with winget, which updates it.</summary>
+    Winget,
     /// <summary>Built in a source checkout: updated there, with git.</summary>
     Checkout,
     /// <summary>Anything else.</summary>
@@ -31,8 +36,15 @@ public static class CliInstall
             if (Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git")))
                 return CliInstallKind.Checkout;
         }
-        // The release build names itself in its first lines.
-        return Shim.Head(full, 400).Contains("Varlatch CLI") ? CliInstallKind.Release : CliInstallKind.Custom;
+        // A copy winget installed is winget's, told as `varlatch self-update` tells it.
+        var slashed = full.Replace('\\', '/').ToLowerInvariant();
+        if (slashed.Contains("/winget/packages/") || slashed.Contains("/winget/links/")) return CliInstallKind.Winget;
+        // The single file names itself in its first lines; the CLI as a
+        // Windows program is the native one.
+        var head = Shim.Head(full, 512);
+        if (command.Script is null && Path.GetExtension(full).Equals(".exe", StringComparison.OrdinalIgnoreCase))
+            return head.StartsWith("MZ") ? CliInstallKind.Release : CliInstallKind.Custom;
+        return head.Contains("Varlatch CLI") ? CliInstallKind.Release : CliInstallKind.Custom;
     }
 
     /// <summary>Whether this user can replace <paramref name="path"/> without an administrator.</summary>

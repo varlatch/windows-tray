@@ -133,6 +133,7 @@ public sealed class SignInController : ObservableObject
 
     private readonly Func<CliInvocation?> cli;
     private readonly SynchronizationContext? context;
+    private readonly object controlGate = new();
     private SignInState state = new SignInState.Idle();
     private CliProcess? process;
     private bool running;
@@ -190,8 +191,14 @@ public sealed class SignInController : ObservableObject
                 }
                 Post(() => Found(link, server));
             });
-        process = started;
+        bool cancelledBeforeStart;
+        lock (controlGate)
+        {
+            process = started;
+            cancelledBeforeStart = cancelled;
+        }
         started.Start();
+        if (cancelledBeforeStart || IsCancelled()) started.Terminate();
         _ = Complete();
         return null;
 
@@ -246,10 +253,13 @@ public sealed class SignInController : ObservableObject
         Begin(new SignInState.Device(server, null));
 
         var start = invocation.Process(["login", "--server", server, "--start", "--json", .. ttlArguments ?? []]);
-        process = start;
-        start.Start(StartTimeout);
+        if (!AttachAndStart(start, StartTimeout))
+        {
+            Finish(new SignInOutcome.Cancelled(server));
+            return;
+        }
         var started = await start.WaitAsync();
-        if (cancelled)
+        if (IsCancelled())
         {
             Finish(new SignInOutcome.Cancelled(server));
             return;
@@ -272,10 +282,13 @@ public sealed class SignInController : ObservableObject
         {
             var wait = invocation.Process(["login", "--server", server, "--wait",
                                            "--timeout", WaitSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture), "--json"]);
-            process = wait;
-            wait.Start();
+            if (!AttachAndStart(wait, timeout: null))
+            {
+                Finish(new SignInOutcome.Cancelled(server));
+                return;
+            }
             var result = await wait.WaitAsync();
-            if (cancelled || (result.Signaled && !result.TimedOut))
+            if (IsCancelled() || (result.Signaled && !result.TimedOut))
             {
                 Finish(new SignInOutcome.Cancelled(server));
                 return;
@@ -324,10 +337,32 @@ public sealed class SignInController : ObservableObject
     /// <summary>Stops the sign-in under way. <paramref name="quietly"/>: another sign-in takes over, so no "cancelled" outcome.</summary>
     public void Cancel(bool quietly = false)
     {
-        if (!running) return;
-        cancelled = true;
-        quiet = quietly;
-        process?.Terminate();
+        CliProcess? target;
+        lock (controlGate)
+        {
+            if (!running) return;
+            cancelled = true;
+            quiet = quietly;
+            target = process;
+        }
+        target?.Terminate();
+    }
+
+    private bool IsCancelled()
+    {
+        lock (controlGate) return cancelled;
+    }
+
+    private bool AttachAndStart(CliProcess child, TimeSpan? timeout)
+    {
+        lock (controlGate)
+        {
+            if (cancelled) return false;
+            process = child;
+        }
+        child.Start(timeout);
+        if (IsCancelled()) child.Terminate();
+        return true;
     }
 
     /// <summary>Completes once no sign-in is under way.</summary>
@@ -335,21 +370,31 @@ public sealed class SignInController : ObservableObject
 
     private void Begin(SignInState next)
     {
+        lock (controlGate)
+        {
+            running = true;
+            cancelled = false;
+            quiet = false;
+            idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
         State = next;
-        running = true;
-        cancelled = false;
-        quiet = false;
-        idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private void Finish(SignInOutcome outcome)
     {
-        process = null;
-        running = false;
+        bool suppress;
+        TaskCompletionSource done;
+        lock (controlGate)
+        {
+            process = null;
+            running = false;
+            suppress = quiet && outcome is SignInOutcome.Cancelled;
+            done = idle;
+        }
         State = new SignInState.Idle();
-        if (!(quiet && outcome is SignInOutcome.Cancelled)) Outcome?.Invoke(outcome);
+        if (!suppress) Outcome?.Invoke(outcome);
         Finished?.Invoke();
-        idle.TrySetResult();
+        done.TrySetResult();
     }
 
     private void Post(Action action)
