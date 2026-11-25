@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-25)
 
 Ready for Varlatch 0.50.0, whose CLI is `varlatch.exe` instead of a file
 that Node.js runs. Works with both, and with servers of both.
